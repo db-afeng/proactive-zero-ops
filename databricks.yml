@@ -22,7 +22,7 @@ targets:
   dev:
     default: true
     workspace:
-      host: https://fevm-proactive-zero-ops.cloud.databricks.com
+      host: https://fe-sandbox-proactive-zero-ops.cloud.databricks.com
     variables:
       catalog: proactive_zero_ops_catalog
       bronze_schema: proactive_zero_ops_bronze

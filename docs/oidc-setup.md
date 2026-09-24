@@ -2,7 +2,7 @@
 
 Complete this checkpoint after the baseline bundle is deployed and before opening the deliberately
 breaking PR. It uses GitHub workload identity federation and stores no Databricks secret. Commands
-below assume authenticated `gh`, workspace profile `proactive-zero-ops`, and an account-admin
+below assume authenticated `gh`, workspace profile `fe-sandbox-proactive-zero-ops`, and an account-admin
 Databricks CLI profile named `<account-admin-profile>`.
 
 ## 1. Create the GitHub environment
@@ -19,15 +19,15 @@ Add these environment variables:
 
 | Variable | Value |
 | --- | --- |
-| `DATABRICKS_HOST` | `https://fevm-proactive-zero-ops.cloud.databricks.com` |
+| `DATABRICKS_HOST` | `https://fe-sandbox-proactive-zero-ops.cloud.databricks.com` |
 | `DATABRICKS_CLIENT_ID` | Application ID of the CI service principal |
-| `DATABRICKS_WAREHOUSE_ID` | `a812711ddc3964b1` |
+| `DATABRICKS_WAREHOUSE_ID` | `4604ceea74f29ea8` |
 | `DATABRICKS_SERVING_ENDPOINT` | Pinned compatible Foundation Model endpoint |
 
 ## 2. Create the Databricks identity and federation policy
 
 Create a service principal named `proactive-zero-ops-lineage-guard`, assign it to workspace
-`7474647284745383`, then create the account-level federation policy. Record the returned numeric
+`7474650525906616`, then create the account-level federation policy. Record the returned numeric
 `id` as `<service-principal-id>` and `applicationId` as `<service-principal-application-id>`.
 
 ```bash
@@ -37,7 +37,7 @@ databricks account service-principals create \
   --profile <account-admin-profile>
 
 databricks account workspace-assignment update \
-  7474647284745383 \
+  7474650525906616 \
   <service-principal-id> \
   --json '{"permissions":["USER"]}' \
   --profile <account-admin-profile>
@@ -75,14 +75,14 @@ application ID, not that numeric ID.
 Grant the principal `CAN_USE` on only the bundle-created SQL warehouse:
 
 ```bash
-databricks permissions update warehouses a812711ddc3964b1 \
+databricks permissions update warehouses 4604ceea74f29ea8 \
   --json '{
     "access_control_list": [{
       "service_principal_name": "<service-principal-application-id>",
       "permission_level": "CAN_USE"
     }]
   }' \
-  --profile proactive-zero-ops
+  --profile fe-sandbox-proactive-zero-ops
 ```
 
 As a metastore administrator, grant read access to only the two lineage tables:
@@ -103,8 +103,13 @@ With an authenticated administrator profile, list compatible endpoints and smoke
 output:
 
 ```bash
-uv run python -m lineage_guard discover-endpoint --profile proactive-zero-ops
+uv run python -m lineage_guard discover-endpoint --profile fe-sandbox-proactive-zero-ops
 ```
+
+If discovery reports that no `system.ai` Claude Sonnet endpoint is available, have a workspace
+administrator enable a compatible Claude Sonnet Foundation Model API endpoint and rerun discovery.
+Do not substitute an untested endpoint: the command pins only an endpoint that passes the guard's
+strict structured-output smoke test.
 
 Store the returned endpoint name in `DATABRICKS_SERVING_ENDPOINT`, grant `CAN_QUERY`, and rerun the
 command using the service principal/OIDC environment if desired. Resolve the endpoint ID and grant
@@ -112,7 +117,7 @@ query permission:
 
 ```bash
 databricks serving-endpoints get <endpoint-name> \
-  --profile proactive-zero-ops \
+  --profile fe-sandbox-proactive-zero-ops \
   --output json
 
 databricks serving-endpoints update-permissions <endpoint-id-from-get> \
@@ -122,7 +127,7 @@ databricks serving-endpoints update-permissions <endpoint-id-from-get> \
       "permission_level": "CAN_QUERY"
     }]
   }' \
-  --profile proactive-zero-ops
+  --profile fe-sandbox-proactive-zero-ops
 ```
 
 Set the GitHub environment variables:
@@ -130,13 +135,13 @@ Set the GitHub environment variables:
 ```bash
 gh variable set DATABRICKS_HOST \
   --env lineage-guard \
-  --body https://fevm-proactive-zero-ops.cloud.databricks.com
+  --body https://fe-sandbox-proactive-zero-ops.cloud.databricks.com
 gh variable set DATABRICKS_CLIENT_ID \
   --env lineage-guard \
   --body <service-principal-application-id>
 gh variable set DATABRICKS_WAREHOUSE_ID \
   --env lineage-guard \
-  --body a812711ddc3964b1
+  --body 4604ceea74f29ea8
 gh variable set DATABRICKS_SERVING_ENDPOINT \
   --env lineage-guard \
   --body <endpoint-name>
