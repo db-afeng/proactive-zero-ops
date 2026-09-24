@@ -1,0 +1,22 @@
+resources:
+  pipelines:
+    credit_risk_pipeline:
+      name: proactive-zero-ops-credit-risk
+      catalog: ${var.catalog}
+      schema: ${resources.schemas.credit_risk_bronze.name}
+      serverless: true
+      continuous: false
+      development: true
+      photon: true
+      channel: CURRENT
+      root_path: ../src/credit_risk
+      libraries:
+        - glob:
+            include: ../src/credit_risk/transformations/**
+      configuration:
+        catalog: ${var.catalog}
+        bronze_schema: ${resources.schemas.credit_risk_bronze.name}
+        silver_schema: ${resources.schemas.credit_risk_silver.name}
+        gold_schema: ${resources.schemas.credit_risk_gold.name}
+        pipelines.numUpdateRetryAttempts: "0"
+        pipelines.maxFlowRetryAttempts: "0"

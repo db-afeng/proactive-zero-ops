@@ -1,0 +1,8 @@
+.databricks/
+.venv/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+assessment.json
+assessment.md

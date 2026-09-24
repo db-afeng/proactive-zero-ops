@@ -1,0 +1,30 @@
+bundle:
+  name: proactive-zero-ops
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Unity Catalog catalog for the credit-risk demo.
+    default: proactive_zero_ops_catalog
+  bronze_schema:
+    description: Bronze schema name.
+    default: proactive_zero_ops_bronze
+  silver_schema:
+    description: Silver schema name.
+    default: proactive_zero_ops_silver
+  gold_schema:
+    description: Gold schema name.
+    default: proactive_zero_ops_gold
+
+targets:
+  dev:
+    default: true
+    workspace:
+      host: https://fevm-proactive-zero-ops.cloud.databricks.com
+    variables:
+      catalog: proactive_zero_ops_catalog
+      bronze_schema: proactive_zero_ops_bronze
+      silver_schema: proactive_zero_ops_silver
+      gold_schema: proactive_zero_ops_gold

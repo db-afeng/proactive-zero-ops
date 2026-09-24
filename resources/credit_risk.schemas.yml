@@ -1,0 +1,16 @@
+resources:
+  schemas:
+    credit_risk_bronze:
+      catalog_name: ${var.catalog}
+      name: ${var.bronze_schema}
+      comment: Synthetic source-aligned credit-risk data for the lineage-guard demo.
+
+    credit_risk_silver:
+      catalog_name: ${var.catalog}
+      name: ${var.silver_schema}
+      comment: Validated and enriched credit-risk features for the lineage-guard demo.
+
+    credit_risk_gold:
+      catalog_name: ${var.catalog}
+      name: ${var.gold_schema}
+      comment: Illustrative portfolio credit-risk aggregates; not for regulatory use.
