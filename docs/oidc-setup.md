@@ -86,6 +86,22 @@ application ID, not that numeric ID.
 
 ## 3. Grant least privilege
 
+Grant the workspace service principal the SQL access entitlement required by the Statement
+Execution API:
+
+```bash
+databricks service-principals patch <service-principal-id> \
+  --json '{
+    "schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    "Operations":[{
+      "op":"add",
+      "path":"entitlements",
+      "value":[{"value":"databricks-sql-access"}]
+    }]
+  }' \
+  --profile fe-sandbox-proactive-zero-ops
+```
+
 Grant the principal `CAN_USE` on only the bundle-created SQL warehouse:
 
 ```bash
@@ -126,9 +142,16 @@ The current workspace has no Claude Sonnet endpoint, so `databricks-gpt-5-6-terr
 tested fallback. It passes the same strict structured-output request used by the guard. Re-run the
 discovery command and replace this fallback when Claude Sonnet becomes available.
 
-Store the returned endpoint name in `DATABRICKS_SERVING_ENDPOINT`, grant `CAN_QUERY`, and rerun the
-command using the service principal/OIDC environment if desired. Resolve the endpoint ID and grant
-query permission:
+Store the returned endpoint name in `DATABRICKS_SERVING_ENDPOINT`. The pinned fallback is exposed
+as a `system.ai` function, so grant `EXECUTE` only on that function:
+
+```sql
+GRANT EXECUTE ON FUNCTION system.ai.`databricks-gpt-5-6-terra`
+TO `<service-principal-application-id>`;
+```
+
+If a future Claude model is exposed as a serving endpoint instead of a `system.ai` function,
+resolve its endpoint ID and grant `CAN_QUERY`:
 
 ```bash
 databricks serving-endpoints get <endpoint-name> \
