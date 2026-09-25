@@ -59,8 +59,14 @@ jobs:
       - name: Create isolated Python environment
         shell: bash
         run: |
-          python3 -c 'import sys; assert sys.version_info >= (3, 11), sys.version'
-          python3 -m venv --clear "$RUNNER_TEMP/lineage-guard-python"
+          python_bootstrap="$(command -v python3.12 || true)"
+          if [[ -z "$python_bootstrap" ]]; then
+            echo "Python 3.12 is required on a self-hosted lineage guard runner." >&2
+            exit 1
+          fi
+          "$python_bootstrap" -c \
+            'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+          "$python_bootstrap" -m venv --clear "$RUNNER_TEMP/lineage-guard-python"
           echo "LINEAGE_GUARD_PYTHON=$RUNNER_TEMP/lineage-guard-python/bin/python" \
             >> "$GITHUB_ENV"
 
