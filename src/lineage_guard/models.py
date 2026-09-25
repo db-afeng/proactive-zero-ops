@@ -75,8 +75,11 @@ class ModelAssessment(BaseModel):
     severity: Severity
     confidence: float = Field(ge=0, le=1)
     summary: str
-    changed_columns: list[ChangedColumn] = Field(default_factory=list)
-    impacts: list[Impact] = Field(default_factory=list)
+    # AI Gateway strict JSON schemas require every property to be listed in
+    # ``required``. The model must therefore emit empty arrays explicitly for
+    # safe changes rather than relying on Pydantic defaults.
+    changed_columns: list[ChangedColumn]
+    impacts: list[Impact]
 
 
 class GuardResult(BaseModel):
