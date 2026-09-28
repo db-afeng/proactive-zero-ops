@@ -5,6 +5,16 @@ from pathlib import Path
 WORKFLOW = Path(".github/workflows/downstream-impact.yml")
 
 
+def test_trusted_checker_uses_pull_request_target_workflow_commit() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    checkout = workflow.split(
+        "name: Check out trusted workflow implementation", maxsplit=1
+    )[1].split("name: Fetch untrusted head as data only", maxsplit=1)[0]
+    assert "ref: ${{ github.sha }}" in checkout
+    assert "github.event.pull_request.base.sha" not in checkout
+
+
 def test_restricted_evidence_is_published_before_public_report_is_prepared() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 

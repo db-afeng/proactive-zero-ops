@@ -36,10 +36,14 @@ jobs:
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
     steps:
-      - name: Check out trusted base implementation
+      - name: Check out trusted workflow implementation
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          # pull_request_target loads this workflow from the default branch, but
+          # pull_request.base.sha can remain pinned to the PR's older comparison
+          # base. Use the immutable trusted workflow commit so newly merged guard
+          # commands are available without ever checking out PR-controlled code.
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: true
 
