@@ -55,6 +55,36 @@ describe('authorizeAssets', () => {
         queryText: 'SELECT ...',
         assets,
       })
-    ).rejects.toThrow('could not be verified');
+    ).rejects.toMatchObject({
+      message: 'Unity Catalog authorization could not be verified',
+      reason: 'invalid_matrix',
+    });
+  });
+
+  it('distinguishes a query failure from an invalid result without exposing details', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await expect(
+      authorizeAssets({
+        executor: { query: vi.fn().mockRejectedValue(new Error('sensitive warehouse detail')) },
+        queryText: 'SELECT ...',
+        assets,
+      })
+    ).rejects.toMatchObject({
+      message: 'Unity Catalog authorization could not be verified',
+      reason: 'query_failed',
+    });
+
+    await expect(
+      authorizeAssets({
+        executor: { query: vi.fn().mockResolvedValue([]) },
+        queryText: 'SELECT ...',
+        assets,
+      })
+    ).rejects.toMatchObject({
+      message: 'Unity Catalog authorization could not be verified',
+      reason: 'invalid_result',
+    });
+    expect(JSON.stringify(warning.mock.calls)).not.toContain('sensitive warehouse detail');
+    warning.mockRestore();
   });
 });

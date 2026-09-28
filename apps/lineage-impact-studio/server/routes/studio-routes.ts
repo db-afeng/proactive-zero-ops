@@ -60,6 +60,7 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
     });
 
     application.get('/api/assessments/:reference', async (request, response) => {
+      response.set('Cache-Control', 'private, no-store');
       try {
         const view = await assessmentService.getView({
           request,

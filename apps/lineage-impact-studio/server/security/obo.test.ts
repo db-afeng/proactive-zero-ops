@@ -16,14 +16,36 @@ describe('requireOboRequest', () => {
   });
 
   it('returns a safe viewer without exposing the token', () => {
+    const accessToken = `header.${'t'.repeat(2048)}.signature`;
     expect(
       requireOboRequest(
         request({
           'x-forwarded-user': 'user-1',
           'x-forwarded-email': 'viewer@example.com',
-          'x-forwarded-access-token': 't'.repeat(32),
+          'x-forwarded-access-token': accessToken,
         })
       )
     ).toEqual({ subject: 'user-1', displayName: 'viewer@example.com' });
+    expect(
+      JSON.stringify(
+        requireOboRequest(
+          request({
+            'x-forwarded-user': 'user-1',
+            'x-forwarded-access-token': accessToken,
+          })
+        )
+      )
+    ).not.toContain(accessToken);
+  });
+
+  it('rejects an implausibly large forwarded token', () => {
+    expect(() =>
+      requireOboRequest(
+        request({
+          'x-forwarded-user': 'user-1',
+          'x-forwarded-access-token': 't'.repeat(16 * 1024 + 1),
+        })
+      )
+    ).toThrow('user authorization');
   });
 });
