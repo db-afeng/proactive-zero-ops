@@ -6,6 +6,7 @@ import pytest
 
 from lineage_guard.disclosure import (
     AssessmentReference,
+    AssessmentSource,
     PublicOutcome,
     RestrictedEvidenceStore,
     prepare_disclosures,
@@ -15,6 +16,12 @@ from lineage_guard.disclosure import (
 )
 
 REFERENCE = AssessmentReference("lgr_0123456789abcdefghijklmnopqrstuv")
+SOURCE = AssessmentSource(
+    repository="db-afeng/proactive-zero-ops",
+    pull_request_number=4,
+    base_sha="a" * 40,
+    head_sha="b" * 40,
+)
 
 
 def sensitive_evidence() -> dict[str, object]:
@@ -39,6 +46,7 @@ def public_representations(status: str = "block") -> list[str]:
     disclosures = prepare_disclosures(
         status=status,
         evidence=sensitive_evidence(),
+        source=SOURCE,
         reference=REFERENCE,
     )
     return [
@@ -65,6 +73,7 @@ def test_public_artifact_has_a_strict_schema() -> None:
     disclosures = prepare_disclosures(
         status="block",
         evidence=sensitive_evidence(),
+        source=SOURCE,
         reference=REFERENCE,
     )
     artifact = json.loads(serialize_public_artifact(disclosures.public))
@@ -87,6 +96,7 @@ def test_unknown_status_fails_closed_without_echoing_it() -> None:
     disclosures = prepare_disclosures(
         status=malicious_status,
         evidence=sensitive_evidence(),
+        source=SOURCE,
         reference=REFERENCE,
     )
     assert disclosures.public.outcome is PublicOutcome.ERROR
@@ -98,6 +108,7 @@ def test_restricted_evidence_is_separate_and_repr_is_redacted() -> None:
     disclosures = prepare_disclosures(
         status="warn",
         evidence=sensitive_evidence(),
+        source=SOURCE,
         reference=REFERENCE,
     )
     restricted = disclosures.restricted
@@ -106,6 +117,14 @@ def test_restricted_evidence_is_separate_and_repr_is_redacted() -> None:
     assert restricted.to_authenticated_record()["authentication"] == "required"
     assert restricted.to_authenticated_record()["viewer_authorization"] == "required"
     assert restricted.to_authenticated_record()["assessment_principal"] == "service_principal"
+    assert restricted.to_authenticated_record()["schema_version"] == 2
+    assert restricted.to_authenticated_record()["source"] == {
+        "provider": "github",
+        "repository": "db-afeng/proactive-zero-ops",
+        "pull_request_number": 4,
+        "base_sha": "a" * 40,
+        "head_sha": "b" * 40,
+    }
     assert "SENSITIVE" not in repr(restricted)
     assert "SENSITIVE" not in repr(disclosures)
 
@@ -119,6 +138,7 @@ def test_generated_references_are_random_opaque_and_reusable() -> None:
     disclosures = prepare_disclosures(
         status="pass",
         evidence=sensitive_evidence(),
+        source=SOURCE,
         reference=first,
     )
     assert first.value in render_public_markdown(disclosures.public)
@@ -142,20 +162,51 @@ def test_reference_validation_rejects_nonopaque_values(value: str) -> None:
 
 def test_public_projection_is_deterministic_for_same_status_and_reference() -> None:
     first = prepare_disclosures(
-        status="block", evidence={"secret": "one"}, reference=REFERENCE
+        status="block", evidence={"secret": "one"}, source=SOURCE, reference=REFERENCE
     ).public
     second = prepare_disclosures(
-        status="block", evidence={"secret": "two"}, reference=REFERENCE
+        status="block", evidence={"secret": "two"}, source=SOURCE, reference=REFERENCE
     ).public
     assert first == second
     assert render_public_markdown(first) == render_public_markdown(second)
     assert serialize_public_artifact(first) == serialize_public_artifact(second)
 
 
+def test_app_link_is_present_only_when_a_valid_https_base_url_is_supplied() -> None:
+    disclosure = prepare_disclosures(
+        status="block",
+        evidence=sensitive_evidence(),
+        source=SOURCE,
+        reference=REFERENCE,
+    ).public
+    unlinked = render_public_markdown(disclosure)
+    linked = render_public_markdown(
+        disclosure,
+        assessment_base_url="https://lineage-impact-studio.example/apps/lineage-impact-studio/",
+    )
+
+    assert "Review authorized impact" not in unlinked
+    assert (
+        "https://lineage-impact-studio.example/apps/lineage-impact-studio/"
+        f"assessments/{REFERENCE.value}"
+    ) in linked
+    assert "SENSITIVE" not in linked
+
+    for invalid in (
+        "http://lineage-impact-studio.example",
+        "https://user@example.com",
+        "https://lineage-impact-studio.example?redirect=https://evil.example",
+    ):
+        with pytest.raises(ValueError, match="HTTPS"):
+            render_public_markdown(disclosure, assessment_base_url=invalid)
+
+
 def test_restricted_store_uses_private_modes_and_atomic_replacement(tmp_path) -> None:
     root = tmp_path / "restricted-evidence"
     store = RestrictedEvidenceStore(root)
-    first = prepare_disclosures(status="block", evidence={"secret": "first"}, reference=REFERENCE)
+    first = prepare_disclosures(
+        status="block", evidence={"secret": "first"}, source=SOURCE, reference=REFERENCE
+    )
     assert store.write(first.restricted) == REFERENCE
 
     target = root / f"{REFERENCE.value}.json"
@@ -164,7 +215,9 @@ def test_restricted_store_uses_private_modes_and_atomic_replacement(tmp_path) ->
     assert store.read(REFERENCE)["evidence"] == {"secret": "first"}
     assert not list(root.glob("*.tmp"))
 
-    second = prepare_disclosures(status="warn", evidence={"secret": "second"}, reference=REFERENCE)
+    second = prepare_disclosures(
+        status="warn", evidence={"secret": "second"}, source=SOURCE, reference=REFERENCE
+    )
     store.write(second.restricted)
     assert store.read(REFERENCE)["evidence"] == {"secret": "second"}
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
@@ -174,7 +227,7 @@ def test_restricted_store_uses_private_modes_and_atomic_replacement(tmp_path) ->
 def test_restricted_store_refuses_records_with_broadened_permissions(tmp_path) -> None:
     store = RestrictedEvidenceStore(tmp_path / "restricted-evidence")
     disclosures = prepare_disclosures(
-        status="error", evidence=sensitive_evidence(), reference=REFERENCE
+        status="error", evidence=sensitive_evidence(), source=SOURCE, reference=REFERENCE
     )
     store.write(disclosures.restricted)
     target = store.root / f"{REFERENCE.value}.json"
@@ -197,7 +250,10 @@ def test_restricted_store_refuses_symbolic_link_root(tmp_path) -> None:
 def test_restricted_serialization_failure_writes_nothing(tmp_path) -> None:
     store = RestrictedEvidenceStore(tmp_path / "restricted-evidence")
     disclosures = prepare_disclosures(
-        status="error", evidence={"unsupported": object()}, reference=REFERENCE
+        status="error",
+        evidence={"unsupported": object()},
+        source=SOURCE,
+        reference=REFERENCE,
     )
 
     with pytest.raises(TypeError, match="unsupported type"):

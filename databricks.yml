@@ -17,6 +17,15 @@ variables:
   gold_schema:
     description: Gold schema name.
     default: proactive_zero_ops_gold
+  lineage_impact_volume:
+    description: Existing Unity Catalog Volume containing restricted assessment envelopes.
+    default: proactive_zero_ops_catalog.proactive_zero_ops_guard.restricted_assessments
+  lineage_impact_secret_scope:
+    description: Databricks secret scope containing Lineage Impact Studio encryption material.
+    default: lineage-impact-studio
+  lineage_impact_encryption_secret_key:
+    description: Secret key containing a canonical base64-encoded 32-byte encryption key.
+    default: encryption-key
 
 targets:
   dev:

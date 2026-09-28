@@ -11,7 +11,9 @@ from typing import Any
 from lineage_guard.ai import AIGatewayAssessor, discover_endpoint
 from lineage_guard.config import load_config
 from lineage_guard.disclosure import (
+    AssessmentSource,
     RestrictedEvidenceStore,
+    deserialize_public_artifact,
     prepare_disclosures,
     render_public_log,
     render_public_markdown,
@@ -25,6 +27,13 @@ from lineage_guard.models import (
     EvidenceOrigin,
     GuardResult,
     Severity,
+)
+from lineage_guard.publication import (
+    DEFAULT_RESTRICTED_VOLUME_ROOT,
+    publish_restricted_evidence,
+    reference_from_public_artifact,
+    validate_publication_receipt,
+    write_private_publication_receipt,
 )
 
 # Enforcement and disclosure policy live in trusted base-branch code. They are
@@ -219,11 +228,12 @@ def _publish(
     result: GuardResult,
     evidence: dict[str, Any],
     *,
+    source: AssessmentSource,
     output: Path,
     markdown_output: Path,
     restricted_dir: Path,
 ) -> int:
-    disclosures = prepare_disclosures(status=result.status, evidence=evidence)
+    disclosures = prepare_disclosures(status=result.status, evidence=evidence, source=source)
     try:
         RestrictedEvidenceStore(restricted_dir).write(disclosures.restricted)
     except Exception:
@@ -236,7 +246,11 @@ def _publish(
             discovery_certainty=DiscoveryCertainty.INCOMPLETE,
             error="restricted evidence persistence failed",
         )
-        disclosures = prepare_disclosures(status=result.status, evidence={"result": result})
+        disclosures = prepare_disclosures(
+            status=result.status,
+            evidence={"result": result},
+            source=source,
+        )
 
     output.write_bytes(serialize_public_artifact(disclosures.public))
     markdown_output.write_text(render_public_markdown(disclosures.public), encoding="utf-8")
@@ -355,13 +369,64 @@ def assess(args: argparse.Namespace) -> int:
         result = _error_result(str(exc), changes.changed_files if changes else [])
 
     evidence = _restricted_payload(result, changes, model_assessment=model_assessment)
+    source = AssessmentSource(
+        repository=args.repository,
+        pull_request_number=args.pull_request_number,
+        base_sha=(changes.base_sha if changes is not None else args.base),
+        head_sha=(changes.head_sha if changes is not None else args.head),
+    )
     return _publish(
         result,
         evidence,
+        source=source,
         output=output,
         markdown_output=markdown_output,
         restricted_dir=restricted_dir,
     )
+
+
+def _workspace_files() -> Any:
+    from databricks.sdk import WorkspaceClient
+
+    return WorkspaceClient().files
+
+
+def publish_evidence(args: argparse.Namespace) -> int:
+    """Publish a locally staged envelope to its immutable UC Volume path."""
+
+    public_path = Path(args.public_assessment).resolve()
+    restricted_dir = Path(args.restricted_evidence_dir).resolve()
+    reference = reference_from_public_artifact(public_path.read_bytes())
+    result = publish_restricted_evidence(
+        store=RestrictedEvidenceStore(restricted_dir),
+        reference=reference,
+        volume_root=args.volume_root,
+        files=_workspace_files(),
+    )
+    write_private_publication_receipt(result, Path(args.receipt_output))
+    disposition = "created" if result.created else "already_present"
+    print(
+        "lineage-guard restricted_evidence="
+        f"{disposition} assessment_reference={result.reference.value}"
+    )
+    return 0
+
+
+def render_public(args: argparse.Namespace) -> int:
+    """Re-render a validated public artifact with its authorized app link."""
+
+    disclosure = deserialize_public_artifact(Path(args.input).read_bytes())
+    validate_publication_receipt(
+        Path(args.publication_receipt).read_bytes(),
+        reference=disclosure.reference,
+        volume_root=args.volume_root,
+    )
+    markdown = render_public_markdown(
+        disclosure,
+        assessment_base_url=args.assessment_base_url,
+    )
+    Path(args.markdown_output).write_text(markdown, encoding="utf-8")
+    return 0
 
 
 def discover(args: argparse.Namespace) -> int:
@@ -384,6 +449,18 @@ def build_parser() -> argparse.ArgumentParser:
     assess_parser = subparsers.add_parser("assess", help="Assess a Git commit range")
     assess_parser.add_argument("--base", required=True, help="Base Git commit or ref")
     assess_parser.add_argument("--head", required=True, help="Head Git commit or ref")
+    assess_parser.add_argument(
+        "--repository",
+        default=os.environ.get("GITHUB_REPOSITORY"),
+        required=os.environ.get("GITHUB_REPOSITORY") is None,
+        help="GitHub repository in owner/name form",
+    )
+    assess_parser.add_argument(
+        "--pull-request-number",
+        required=True,
+        type=int,
+        help="GitHub pull request number",
+    )
     assess_parser.add_argument("--repo", default=".", help="Repository root")
     assess_parser.add_argument("--bundle-file", default="databricks.yml")
     assess_parser.add_argument("--target")
@@ -393,6 +470,43 @@ def build_parser() -> argparse.ArgumentParser:
     assess_parser.add_argument("--markdown-output", default="assessment.md")
     assess_parser.add_argument("--restricted-evidence-dir")
     assess_parser.set_defaults(handler=assess)
+
+    publish_parser = subparsers.add_parser(
+        "publish-evidence",
+        help="Publish an immutable restricted envelope to a Unity Catalog Volume",
+    )
+    publish_parser.add_argument("--public-assessment", default="assessment.json")
+    publish_parser.add_argument(
+        "--restricted-evidence-dir",
+        default=os.environ.get("LINEAGE_GUARD_RESTRICTED_DIR"),
+        required=os.environ.get("LINEAGE_GUARD_RESTRICTED_DIR") is None,
+    )
+    publish_parser.add_argument("--receipt-output", required=True)
+    publish_parser.add_argument(
+        "--volume-root",
+        default=os.environ.get(
+            "LINEAGE_GUARD_RESTRICTED_VOLUME_ROOT",
+            DEFAULT_RESTRICTED_VOLUME_ROOT,
+        ),
+    )
+    publish_parser.set_defaults(handler=publish_evidence)
+
+    render_parser = subparsers.add_parser(
+        "render-public",
+        help="Render validated public Markdown with an assessment app link",
+    )
+    render_parser.add_argument("--input", default="assessment.json")
+    render_parser.add_argument("--markdown-output", default="assessment.md")
+    render_parser.add_argument("--assessment-base-url", required=True)
+    render_parser.add_argument("--publication-receipt", required=True)
+    render_parser.add_argument(
+        "--volume-root",
+        default=os.environ.get(
+            "LINEAGE_GUARD_RESTRICTED_VOLUME_ROOT",
+            DEFAULT_RESTRICTED_VOLUME_ROOT,
+        ),
+    )
+    render_parser.set_defaults(handler=render_public)
 
     discover_parser = subparsers.add_parser(
         "discover-endpoint", help="Select a compatible Claude Sonnet endpoint"
