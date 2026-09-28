@@ -193,6 +193,42 @@ def test_target_catalog_and_schema_changes_change_affected_dataset_identities(
     )
 
 
+def test_pipeline_source_path_change_changes_affected_datasets_without_sql_edits(
+    tmp_path: Path,
+) -> None:
+    repo, base = create_pipeline_repo(tmp_path, {"accounts.sql": materialized_view("old_accounts")})
+    # The proposed source already exists at the base revision. Only trusted
+    # declarative bundle YAML changes between the assessed revisions.
+    base = commit_files(
+        repo,
+        {"src/next/exposure.sql": materialized_view("new_exposure")},
+        "stage alternate source",
+    )
+    next_pipeline = PIPELINE_YAML.replace("../src/pipeline/**", "../src/next/**")
+    head = commit_files(
+        repo,
+        {"resources/pipeline.yml": next_pipeline},
+        "select alternate source",
+    )
+
+    changes = collect_changes(repo, base, head, target="dev")
+
+    assert changes.complete, changes.issues
+    assert changes.changed_files == ["resources/pipeline.yml"]
+    assert change_by_paths(changes, "src/pipeline/accounts.sql", None).kind == "deleted"
+    assert change_by_paths(changes, None, "src/next/exposure.sql").kind == "added"
+    assert changes.affected_datasets == {
+        "dev_catalog.dev_bronze.old_accounts",
+        "dev_catalog.dev_bronze.new_exposure",
+    }
+    pipeline_change = next(
+        change
+        for change in changes.bundle_changes.resource_changes
+        if change.after is not None and change.after.identity == "pipelines.risk"
+    )
+    assert {field.field for field in pipeline_change.fields} >= {"libraries", "sources"}
+
+
 def test_sql_additions_deletions_and_file_renames_are_compared_across_revisions(
     tmp_path: Path,
 ) -> None:
