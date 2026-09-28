@@ -13,6 +13,8 @@ from lineage_guard.models import LineageEdge
 SOURCE = "proactive_zero_ops_catalog.proactive_zero_ops_bronze.loan_accounts"
 OTHER = "proactive_zero_ops_catalog.proactive_zero_ops_bronze.collateral"
 TARGET = "proactive_zero_ops_catalog.proactive_zero_ops_silver.loan_exposure"
+BASE_SHA = "a" * 40
+HEAD_SHA = "b" * 40
 
 
 def arguments(tmp_path: Path) -> argparse.Namespace:
@@ -22,8 +24,10 @@ def arguments(tmp_path: Path) -> argparse.Namespace:
         bundle_file="databricks.yml",
         target="dev",
         max_lineage_depth=None,
-        base="base",
-        head="head",
+        base=BASE_SHA,
+        head=HEAD_SHA,
+        repository="db-afeng/proactive-zero-ops",
+        pull_request_number=4,
         output=str(tmp_path / "assessment.json"),
         markdown_output=str(tmp_path / "assessment.md"),
         restricted_evidence_dir=str(tmp_path / "restricted"),
@@ -43,6 +47,8 @@ def changes(*tables: str) -> FakeChanges:
         source_changes=(),
     )
     return FakeChanges(
+        base_sha=BASE_SHA,
+        head_sha=HEAD_SHA,
         complete=True,
         has_relevant_changes=bool(tables),
         changed_files=[f"src/{index}.sql" for index, _ in enumerate(tables)],
@@ -78,6 +84,15 @@ def test_no_semantic_or_bundle_change_passes_without_databricks(
     exit_code = assess(arguments(tmp_path))
     assert exit_code == 0
     assert public_result(tmp_path)["outcome"] == "pass"
+    restricted = restricted_result(tmp_path)
+    assert restricted["schema_version"] == 2
+    assert restricted["source"] == {
+        "provider": "github",
+        "repository": "db-afeng/proactive-zero-ops",
+        "pull_request_number": 4,
+        "base_sha": BASE_SHA,
+        "head_sha": HEAD_SHA,
+    }
 
 
 @pytest.mark.parametrize("message", ["authentication failed", "warehouse unavailable"])

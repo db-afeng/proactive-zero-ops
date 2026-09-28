@@ -1,0 +1,30 @@
+resources:
+  apps:
+    lineage_impact_studio:
+      name: lineage-impact-studio
+      description: Permission-aware lineage impact review and guided remediation for pull requests.
+      source_code_path: ../apps/lineage-impact-studio
+      lifecycle:
+        started: true
+      user_api_scopes:
+        - sql
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: 4604ceea74f29ea8
+            permission: CAN_USE
+        - name: files
+          uc_securable:
+            securable_full_name: ${var.lineage_impact_volume}
+            securable_type: VOLUME
+            permission: READ_VOLUME
+        - name: postgres
+          postgres:
+            branch: projects/lineage-impact-studio/branches/production
+            database: projects/lineage-impact-studio/branches/production/databases/databricks-postgres
+            permission: CAN_CONNECT_AND_CREATE
+        - name: encryption-key
+          secret:
+            scope: ${var.lineage_impact_secret_scope}
+            key: ${var.lineage_impact_encryption_secret_key}
+            permission: READ

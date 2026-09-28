@@ -24,6 +24,8 @@ Add these environment variables:
 | `DATABRICKS_WAREHOUSE_ID` | `4604ceea74f29ea8` |
 | `DATABRICKS_SERVING_ENDPOINT` | `databricks-gpt-5-6-terra` (current compatible endpoint) |
 | `DATABRICKS_BUNDLE_TARGET` | `dev` |
+| `LINEAGE_GUARD_RESTRICTED_VOLUME_ROOT` | `/Volumes/proactive_zero_ops_catalog/proactive_zero_ops_guard/restricted_assessments` |
+| `LINEAGE_IMPACT_STUDIO_URL` | Deployed HTTPS URL of the `lineage-impact-studio` Databricks App |
 
 The bundle target is selected by this trusted environment variable (the workflow has a trusted
 `dev` default). Pull-request configuration cannot select a different target or connection. The
@@ -130,6 +132,23 @@ GRANT SELECT ON TABLE system.access.column_lineage TO `<service-principal-applic
 GRANT SELECT ON TABLE system.access.table_lineage TO `<service-principal-application-id>`;
 ```
 
+The bundle creates the managed `restricted_assessments` Volume. Grant the CI principal only the
+parent traversal and file privileges needed for immutable publication and idempotent retry checks:
+
+```sql
+GRANT USE CATALOG ON CATALOG proactive_zero_ops_catalog
+TO `<service-principal-application-id>`;
+GRANT USE SCHEMA ON SCHEMA proactive_zero_ops_catalog.proactive_zero_ops_guard
+TO `<service-principal-application-id>`;
+GRANT READ VOLUME, WRITE VOLUME ON VOLUME
+  proactive_zero_ops_catalog.proactive_zero_ops_guard.restricted_assessments
+TO `<service-principal-application-id>`;
+```
+
+Grant `READ VOLUME` (with parent `USE` privileges) separately to the Databricks App service
+principal. Do not grant Volume access to workspace users: the app reads the envelope as its service
+principal and performs the asset-level disclosure checks with the signed-in user's OBO identity.
+
 The guard does not need `SELECT` on the credit-risk tables because it reads transformation source
 from Git and relationship metadata from the system tables.
 
@@ -192,6 +211,12 @@ gh variable set DATABRICKS_SERVING_ENDPOINT \
 gh variable set DATABRICKS_BUNDLE_TARGET \
   --env lineage-guard \
   --body dev
+gh variable set LINEAGE_GUARD_RESTRICTED_VOLUME_ROOT \
+  --env lineage-guard \
+  --body /Volumes/proactive_zero_ops_catalog/proactive_zero_ops_guard/restricted_assessments
+gh variable set LINEAGE_IMPACT_STUDIO_URL \
+  --env lineage-guard \
+  --body <deployed-app-https-url>
 ```
 
 ## 5. Understand the identity and evidence boundary
@@ -207,13 +232,16 @@ publishes only an approved outcome, generic message, and random opaque assessmen
 every GitHub surface. It never publishes SQL, source paths, asset IDs, owners, lineage paths,
 downstream definitions, model text, or detailed errors.
 
-Full evidence is stored only under `$RUNNER_TEMP/lineage-guard-restricted` on the runner. The
-directory is mode `0700`, evidence and checker logs are mode `0600`, and the directory is not
-uploaded as an artifact. On a dedicated self-hosted runner, restrict OS access to authorized
-operators. GitHub-hosted runner storage is ephemeral. If evidence must later be available to more
-than those operators, use a protected evidence service that authenticates each viewer and performs
-viewer-specific authorization for the opaque reference. Adding OBO later requires genuine user
-delegation; the existing OIDC exchange cannot be treated as OBO.
+Full evidence is atomically staged under `$RUNNER_TEMP/lineage-guard-restricted` with directory mode
+`0700` and file mode `0600`, then published as the immutable
+`<assessment-reference>.json` object in the restricted Unity Catalog Volume. The local directory and
+checker logs are never uploaded as GitHub artifacts. A retry accepts an existing object only when
+its bytes are identical; the workflow never overwrites evidence bound to an opaque reference.
+
+The pull-request comment receives an app deep link only after Volume publication succeeds and the
+published reference still matches the strict public artifact. The GitHub OIDC identity is still the
+CI service principal, not the viewing user. Viewer-specific disclosure happens later in the app
+through genuine Databricks OBO authorization.
 
 ## 6. Configure static runner egress when workspace IP ACLs are enabled
 

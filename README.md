@@ -83,17 +83,26 @@ chmod 0700 /secure/local/lineage-guard-evidence
 uv run python -m lineage_guard assess \
   --base <base-sha> \
   --head <head-sha> \
+  --repository db-afeng/proactive-zero-ops \
+  --pull-request-number <pr-number> \
   --target "$DATABRICKS_BUNDLE_TARGET" \
   --output assessment.json \
   --markdown-output assessment.md \
   --restricted-evidence-dir /secure/local/lineage-guard-evidence
+
+uv run python -m lineage_guard publish-evidence \
+  --public-assessment assessment.json \
+  --restricted-evidence-dir /secure/local/lineage-guard-evidence \
+  --volume-root /Volumes/proactive_zero_ops_catalog/proactive_zero_ops_guard/restricted_assessments
 ```
 
 The command exits `0` for pass/warn, `1` for a grounded block, and `2` when the assessment cannot
 be performed safely or discovery is incomplete. `assessment.json` and `assessment.md` are safe
 public projections; detailed evidence is stored separately under its opaque reference. Local runs
-use the selected CLI profile or another local Databricks authentication method. `github-oidc` works
-only inside the configured GitHub Actions environment.
+use the selected CLI profile or another local Databricks authentication method. Restricted
+envelopes use schema version 2 and bind the evidence to the repository, PR, exact base/head commits,
+and creation time. Volume publication is immutable and idempotent for identical retry bytes.
+`github-oidc` works only inside the configured GitHub Actions environment.
 
 See [docs/oidc-setup.md](docs/oidc-setup.md) for the administrator checkpoint.
 
