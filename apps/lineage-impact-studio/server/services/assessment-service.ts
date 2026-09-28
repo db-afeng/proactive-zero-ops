@@ -58,7 +58,8 @@ export class AssessmentService {
     try {
       reference = parseAssessmentReference(options.reference);
       envelopeBytes = await this.#reader.read(reference);
-    } catch {
+    } catch (error) {
+      console.warn('[lineage-impact-studio] Assessment unavailable at envelope load', safeErrorType(error));
       throw new AssessmentUnavailableError();
     }
 
@@ -74,12 +75,14 @@ export class AssessmentService {
           queryText: this.#assetAccessQuery,
           assets: projection.uniqueAssets,
         });
-      } catch {
+      } catch (error) {
+        console.warn('[lineage-impact-studio] Assessment permission check failed', safeErrorType(error));
         throw new AssessmentPermissionCheckError();
       }
 
       const anyAuthorized = [...access.values()].some((decision) => decision.authorized);
       if (projection.uniqueAssets.length > 0 && !anyAuthorized) {
+        console.warn('[lineage-impact-studio] Assessment has no authorized assets');
         throw new AssessmentUnavailableError();
       }
 
@@ -119,6 +122,7 @@ export class AssessmentService {
       if (error instanceof AssessmentUnavailableError || error instanceof AssessmentPermissionCheckError) {
         throw error;
       }
+      console.warn('[lineage-impact-studio] Assessment unavailable after envelope load', safeErrorType(error));
       throw new AssessmentUnavailableError();
     }
   }
@@ -146,4 +150,13 @@ function assessmentFreshness(createdAtValue: string, now: Date): AssessmentViewV
   if (!Number.isFinite(age) || age < 0) return 'unknown';
   if (age > MAX_ASSESSMENT_AGE_MS) return 'expired';
   return age <= CURRENT_WINDOW_MS ? 'current' : 'stale';
+}
+
+function safeErrorType(error: unknown): Record<string, string> {
+  const result: Record<string, string> = { type: error instanceof Error ? error.name : typeof error };
+  if (typeof error === 'object' && error !== null) {
+    const reason: unknown = Reflect.get(error, 'reason');
+    if (typeof reason === 'string' && /^[a-z_]+$/.test(reason)) result.reason = reason;
+  }
+  return result;
 }

@@ -64,6 +64,7 @@ function unwrapSession(value: FixSession | { session: FixSession }): FixSession 
 
 export function getAssessment(reference: string, signal?: AbortSignal) {
   return requestJson<AssessmentViewV1>(`/api/assessments/${encodeURIComponent(reference)}`, {
+    cache: 'no-store',
     signal,
   });
 }
