@@ -6,3 +6,5 @@ __pycache__/
 .ruff_cache/
 assessment.json
 assessment.md
+.lineage-guard-restricted/
+lineage-guard-restricted/

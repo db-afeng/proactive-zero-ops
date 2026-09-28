@@ -23,6 +23,12 @@ Add these environment variables:
 | `DATABRICKS_CLIENT_ID` | Application ID of the CI service principal |
 | `DATABRICKS_WAREHOUSE_ID` | `4604ceea74f29ea8` |
 | `DATABRICKS_SERVING_ENDPOINT` | `databricks-gpt-5-6-terra` (current compatible endpoint) |
+| `DATABRICKS_BUNDLE_TARGET` | `dev` |
+
+The bundle target is selected by this trusted environment variable (the workflow has a trusted
+`dev` default). Pull-request configuration cannot select a different target or connection. The
+checker reads both revisions as data and does not validate, plan, deploy, or run the proposed bundle.
+Executable bundle generators and unresolved dynamic configuration are reported as unsupported.
 
 ## 2. Create the Databricks identity and federation policy
 
@@ -183,9 +189,33 @@ gh variable set DATABRICKS_WAREHOUSE_ID \
 gh variable set DATABRICKS_SERVING_ENDPOINT \
   --env lineage-guard \
   --body <endpoint-name>
+gh variable set DATABRICKS_BUNDLE_TARGET \
+  --env lineage-guard \
+  --body dev
 ```
 
-## 5. Configure static runner egress when workspace IP ACLs are enabled
+## 5. Understand the identity and evidence boundary
+
+`DATABRICKS_AUTH_TYPE=github-oidc` exchanges the workflow's GitHub token for the CI **service
+principal**. It is workload identity federation, not on-behalf-of (OBO) authentication and not user
+delegation. Databricks sees the service principal's grants when the guard queries lineage and calls
+the model.
+
+Checking the PR author's Databricks permissions would not make a GitHub report private: comments,
+summaries, logs, and artifacts can be read by other repository users. The workflow therefore
+publishes only an approved outcome, generic message, and random opaque assessment reference on
+every GitHub surface. It never publishes SQL, source paths, asset IDs, owners, lineage paths,
+downstream definitions, model text, or detailed errors.
+
+Full evidence is stored only under `$RUNNER_TEMP/lineage-guard-restricted` on the runner. The
+directory is mode `0700`, evidence and checker logs are mode `0600`, and the directory is not
+uploaded as an artifact. On a dedicated self-hosted runner, restrict OS access to authorized
+operators. GitHub-hosted runner storage is ephemeral. If evidence must later be available to more
+than those operators, use a protected evidence service that authenticates each viewer and performs
+viewer-specific authorization for the opaque reference. Adding OBO later requires genuine user
+delegation; the existing OIDC exchange cannot be treated as OBO.
+
+## 6. Configure static runner egress when workspace IP ACLs are enabled
 
 Do not add GitHub's complete hosted-runner address list to a Databricks workspace allowlist. GitHub
 currently publishes thousands of dynamic Actions CIDRs, a rerun can move to a different range, and
@@ -209,7 +239,7 @@ The second command must show an online runner carrying the configured label befo
 rerun. If `LINEAGE_GUARD_RUNNER` is unset, the workflow falls back to `ubuntu-latest`, which is
 suitable only when the target workspace does not restrict public egress with IP ACLs.
 
-## 6. Verify federation and branch protection
+## 7. Verify federation and branch protection
 
 The workflow sets `DATABRICKS_AUTH_TYPE=github-oidc`, requests `id-token: write`, and references the
 `lineage-guard` environment, so its OIDC subject must match the policy above. After the first PR run
@@ -242,8 +272,10 @@ gh api --method POST repos/db-afeng/proactive-zero-ops/rulesets --input - <<'JSO
 JSON
 ```
 
-Authentication, lineage, or model failures intentionally fail the check closed.
+Authentication, model, discovery, parsing, configuration, and lineage coverage failures
+intentionally fail the check closed. Missing observed lineage is reported as incomplete coverage,
+not as proof of no downstream impact.
 
 In the first workflow log, verify that `DATABRICKS_AUTH_TYPE` is `github-oidc` and that no
 `DATABRICKS_TOKEN` or client secret is configured. A successful lineage query and model call prove
-federation end to end.
+service-principal federation end to end; they do not prove user delegation.
