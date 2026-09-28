@@ -1,47 +1,6 @@
 version: 1
 
+# Optional trusted operational setting. Dataset identities and source files
+# are discovered independently from each bundle revision.
 settings:
-  governed_roots:
-    - src/credit_risk/transformations
-  lineage_lookback_days: 30
   max_lineage_depth: 5
-  block_confidence: 0.80
-  max_context_characters: 60000
-
-datasets:
-  src/credit_risk/transformations/bronze/borrowers.sql:
-    table: proactive_zero_ops_catalog.proactive_zero_ops_bronze.borrowers
-    layer: bronze
-  src/credit_risk/transformations/bronze/loan_accounts.sql:
-    table: proactive_zero_ops_catalog.proactive_zero_ops_bronze.loan_accounts
-    layer: bronze
-  src/credit_risk/transformations/bronze/payment_events.sql:
-    table: proactive_zero_ops_catalog.proactive_zero_ops_bronze.payment_events
-    layer: bronze
-  src/credit_risk/transformations/bronze/credit_scores.sql:
-    table: proactive_zero_ops_catalog.proactive_zero_ops_bronze.credit_scores
-    layer: bronze
-  src/credit_risk/transformations/bronze/collateral.sql:
-    table: proactive_zero_ops_catalog.proactive_zero_ops_bronze.collateral
-    layer: bronze
-  src/credit_risk/transformations/silver/borrower_risk_profile.sql:
-    table: proactive_zero_ops_catalog.proactive_zero_ops_silver.borrower_risk_profile
-    layer: silver
-  src/credit_risk/transformations/silver/loan_exposure.sql:
-    table: proactive_zero_ops_catalog.proactive_zero_ops_silver.loan_exposure
-    layer: silver
-  src/credit_risk/transformations/silver/delinquency_features.sql:
-    table: proactive_zero_ops_catalog.proactive_zero_ops_silver.delinquency_features
-    layer: silver
-  src/credit_risk/transformations/silver/collateral_adjusted_exposure.sql:
-    table: proactive_zero_ops_catalog.proactive_zero_ops_silver.collateral_adjusted_exposure
-    layer: silver
-  src/credit_risk/transformations/gold/portfolio_expected_loss.sql:
-    table: proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_loss
-    layer: gold
-  src/credit_risk/transformations/gold/delinquency_watchlist.sql:
-    table: proactive_zero_ops_catalog.proactive_zero_ops_gold.delinquency_watchlist
-    layer: gold
-  src/credit_risk/transformations/gold/sector_concentration.sql:
-    table: proactive_zero_ops_catalog.proactive_zero_ops_gold.sector_concentration
-    layer: gold

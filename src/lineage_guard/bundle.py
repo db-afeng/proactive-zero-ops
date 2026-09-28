@@ -144,9 +144,7 @@ class GitRevisionTree:
         raw = self._git_bytes("ls-tree", "-rz", "--name-only", self.commit, "--")
         self._files = tuple(
             sorted(
-                part.decode("utf-8", errors="surrogateescape")
-                for part in raw.split(b"\0")
-                if part
+                part.decode("utf-8", errors="surrogateescape") for part in raw.split(b"\0") if part
             )
         )
         self._file_set = frozenset(self._files)
@@ -298,10 +296,14 @@ def compare_bundle_snapshots(base: BundleSnapshot, proposed: BundleSnapshot) -> 
         candidates = by_fingerprint.get(_resource_fingerprint(before[old_identity]), [])
         if len(candidates) == 1:
             new_identity = candidates[0]
-            if sum(
-                _resource_fingerprint(before[item]) == _resource_fingerprint(before[old_identity])
-                for item in removed
-            ) == 1:
+            if (
+                sum(
+                    _resource_fingerprint(before[item])
+                    == _resource_fingerprint(before[old_identity])
+                    for item in removed
+                )
+                == 1
+            ):
                 rename_candidates.append((old_identity, new_identity))
 
     for old_identity, new_identity in rename_candidates:
@@ -666,9 +668,7 @@ def _resolve_variables(
                         DiscoveryIssue(
                             code="unsupported_dynamic_variable",
                             message=f"Target variable {name} requires a workspace lookup",
-                            file=_origin_for(
-                                origins, ("targets", target, "variables", str(name))
-                            ),
+                            file=_origin_for(origins, ("targets", target, "variables", str(name))),
                             field=f"targets.{target}.variables.{name}",
                         )
                     )
@@ -713,15 +713,11 @@ def _resolve_configuration(
             continue
         for match in _SUBSTITUTION.finditer(value):
             token = match.group(1)
-            dynamic = token.startswith(("workspace.", "secrets.", "env.")) or token.endswith(
-                ".id"
-            )
+            dynamic = token.startswith(("workspace.", "secrets.", "env.")) or token.endswith(".id")
             issues.append(
                 DiscoveryIssue(
                     code=(
-                        "unsupported_dynamic_substitution"
-                        if dynamic
-                        else "unresolved_substitution"
+                        "unsupported_dynamic_substitution" if dynamic else "unresolved_substitution"
                     ),
                     message=f"Could not statically resolve ${{{token}}}",
                     file=_origin_for(origins, path),
@@ -833,14 +829,10 @@ def _discover_resources(
             sources: list[SourceReference] = []
             if resource_type == "pipelines":
                 sources.extend(
-                    _pipeline_sources(
-                        tree, str(key), config, resource_path, origins, issues
-                    )
+                    _pipeline_sources(tree, str(key), config, resource_path, origins, issues)
                 )
             elif resource_type == "jobs":
-                sources.extend(
-                    _job_sources(tree, str(key), config, resource_path, origins, issues)
-                )
+                sources.extend(_job_sources(tree, str(key), config, resource_path, origins, issues))
             resources.append(
                 BundleResource(
                     resource_type=str(resource_type),

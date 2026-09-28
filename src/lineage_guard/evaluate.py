@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from lineage_guard.lineage import LineageGraph
-from lineage_guard.models import GuardResult, ModelAssessment, Severity
+from lineage_guard.models import (
+    DiscoveryCertainty,
+    GuardResult,
+    ModelAssessment,
+    Severity,
+)
 
 
 def evaluate_assessment(
@@ -10,31 +15,16 @@ def evaluate_assessment(
     changed_tables: set[str],
     changed_files: list[str],
     block_confidence: float,
+    *,
+    discovery_complete: bool = True,
+    coverage_limitations: list[str] | None = None,
+    semantic_changes: list[dict[str, object]] | None = None,
+    bundle_changes: list[dict[str, object]] | None = None,
 ) -> GuardResult:
     normalized_sources = {table.lower() for table in changed_tables}
-    observed_source_columns = {
-        (edge.source_table, edge.source_column)
-        for edge in graph.edges
-        if edge.source_column is not None
-    }
     grounded = []
     warnings: list[str] = []
-    grounded_columns = []
-
-    for column in assessment.changed_columns:
-        if column.table.lower() not in normalized_sources:
-            warnings.append(
-                f"Rejected ungrounded column claim for {column.table}.{column.column}: "
-                "table was not changed"
-            )
-            continue
-        if (column.table.lower(), column.column.lower()) not in observed_source_columns:
-            warnings.append(
-                f"Rejected ungrounded column claim for {column.table}.{column.column}: "
-                "column was not observed in downstream lineage"
-            )
-            continue
-        grounded_columns.append(column)
+    limitations = list(coverage_limitations or [])
 
     for impact in assessment.impacts:
         path = [part.lower() for part in impact.path]
@@ -50,17 +40,20 @@ def evaluate_assessment(
             continue
         if not graph.has_path(path):
             warnings.append(
-                f"Rejected ungrounded impact for {impact.asset}: lineage path was not observed"
+                f"Rejected ungrounded impact for {impact.asset}: dependency path was not verified"
             )
             continue
         grounded.append(impact.model_copy(update={"asset": path[-1], "path": path}))
 
     should_block = (
-        assessment.severity in {Severity.HIGH, Severity.CRITICAL}
+        discovery_complete
+        and assessment.severity in {Severity.HIGH, Severity.CRITICAL}
         and assessment.confidence >= block_confidence
         and bool(grounded)
     )
-    if should_block:
+    if not discovery_complete:
+        status = "error"
+    elif should_block:
         status = "block"
     elif assessment.severity in {Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL} or warnings:
         status = "warn"
@@ -77,9 +70,15 @@ def evaluate_assessment(
         severity=assessment.severity,
         confidence=assessment.confidence,
         summary=assessment.summary,
+        assessment_complete=discovery_complete,
+        discovery_certainty=(
+            DiscoveryCertainty.COMPLETE if discovery_complete else DiscoveryCertainty.INCOMPLETE
+        ),
         changed_files=changed_files,
-        changed_columns=grounded_columns,
         impacts=grounded,
         lineage_edges=graph.edges,
+        semantic_changes=semantic_changes or [],
+        bundle_changes=bundle_changes or [],
+        coverage_limitations=limitations,
         warnings=warnings,
     )

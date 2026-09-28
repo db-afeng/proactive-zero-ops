@@ -20,6 +20,23 @@ class Decision(StrEnum):
     BLOCK = "block"
 
 
+class EvidenceOrigin(StrEnum):
+    """How a dependency was established.
+
+    Proposed-code edges are derived from deterministic SQL parsing. Observed
+    edges come from Unity Catalog system tables and describe prior executions.
+    They remain separate even when they connect the same two assets.
+    """
+
+    PROPOSED_CODE = "proposed_code"
+    OBSERVED_LINEAGE = "observed_lineage"
+
+
+class DiscoveryCertainty(StrEnum):
+    COMPLETE = "complete"
+    INCOMPLETE = "incomplete"
+
+
 class LineageEdge(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -30,15 +47,21 @@ class LineageEdge(BaseModel):
     target_type: str = "TABLE"
     level: Literal["column", "table"]
     event_time: str | None = None
+    origin: EvidenceOrigin = EvidenceOrigin.OBSERVED_LINEAGE
+    entity_type: str | None = None
+    entity_id: str | None = None
+    entity_run_id: str | None = None
+    created_by: str | None = None
 
     @property
-    def key(self) -> tuple[str, str, str | None, str | None, str]:
+    def key(self) -> tuple[str, str, str | None, str | None, str, str]:
         return (
             self.source_table,
             self.target_table,
             self.source_column,
             self.target_column,
             self.level,
+            self.origin.value,
         )
 
 
@@ -75,10 +98,6 @@ class ModelAssessment(BaseModel):
     severity: Severity
     confidence: float = Field(ge=0, le=1)
     summary: str
-    # AI Gateway strict JSON schemas require every property to be listed in
-    # ``required``. The model must therefore emit empty arrays explicitly for
-    # safe changes rather than relying on Pydantic defaults.
-    changed_columns: list[ChangedColumn]
     impacts: list[Impact]
 
 
@@ -89,10 +108,15 @@ class GuardResult(BaseModel):
     severity: Severity = Severity.NONE
     confidence: float = Field(default=0, ge=0, le=1)
     summary: str
+    assessment_complete: bool = True
+    discovery_certainty: DiscoveryCertainty = DiscoveryCertainty.COMPLETE
     changed_files: list[str] = Field(default_factory=list)
     changed_columns: list[ChangedColumn] = Field(default_factory=list)
     impacts: list[Impact] = Field(default_factory=list)
     lineage_edges: list[LineageEdge] = Field(default_factory=list)
+    semantic_changes: list[dict[str, object]] = Field(default_factory=list)
+    bundle_changes: list[dict[str, object]] = Field(default_factory=list)
+    coverage_limitations: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     error: str | None = None
 

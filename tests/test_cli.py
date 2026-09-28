@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from lineage_guard.cli import assess
-from lineage_guard.config import load_config
+from lineage_guard.config import GuardConfig
 from lineage_guard.lineage import LineageGraph
 from lineage_guard.models import LineageEdge
 
@@ -19,49 +19,69 @@ def arguments(tmp_path: Path) -> argparse.Namespace:
     return argparse.Namespace(
         repo=str(tmp_path),
         config="lineage_guard.yml",
+        bundle_file="databricks.yml",
+        target="dev",
+        max_lineage_depth=None,
         base="base",
         head="head",
         output=str(tmp_path / "assessment.json"),
         markdown_output=str(tmp_path / "assessment.md"),
+        restricted_evidence_dir=str(tmp_path / "restricted"),
     )
 
 
-def changes(*tables: str) -> SimpleNamespace:
-    datasets = [
-        SimpleNamespace(
-            path=f"src/{index}.sql",
-            table=table,
-            diff="changed",
-            base_sql="SELECT 1",
-            head_sql="SELECT 2",
-        )
-        for index, table in enumerate(tables)
-    ]
-    return SimpleNamespace(
-        changed_files=[dataset.path for dataset in datasets],
-        datasets=datasets,
-        head_sha="head",
+class FakeChanges(SimpleNamespace):
+    def restricted_evidence(self) -> dict[str, object]:
+        return {"sensitive": "SENSITIVE_ASSET_METADATA"}
+
+
+def changes(*tables: str) -> FakeChanges:
+    empty_bundle = SimpleNamespace(
+        configuration_changes=(),
+        variable_changes=(),
+        resource_changes=(),
+        source_changes=(),
+    )
+    return FakeChanges(
+        complete=True,
+        has_relevant_changes=bool(tables),
+        changed_files=[f"src/{index}.sql" for index, _ in enumerate(tables)],
+        affected_datasets=frozenset(tables),
+        proposed_code_edges=(),
+        meaningful_sql_changes=(),
+        bundle_changes=empty_bundle,
+        target="dev",
+        issues=(),
+        proposed=SimpleNamespace(documents=()),
     )
 
 
-def patch_inputs(monkeypatch: pytest.MonkeyPatch, change_set: SimpleNamespace) -> None:
-    config = load_config(Path("lineage_guard.yml"))
-    monkeypatch.setattr("lineage_guard.cli.load_config", lambda _: config)
-    monkeypatch.setattr("lineage_guard.cli.collect_changes", lambda *_: change_set)
+def patch_inputs(monkeypatch: pytest.MonkeyPatch, change_set: FakeChanges) -> None:
+    monkeypatch.setattr("lineage_guard.cli.load_config", lambda _: GuardConfig())
+    monkeypatch.setattr("lineage_guard.cli.collect_changes", lambda *_args, **_kwargs: change_set)
 
 
-def test_no_governed_change_passes_without_databricks(
+def public_result(tmp_path: Path) -> dict[str, object]:
+    return json.loads((tmp_path / "assessment.json").read_text())
+
+
+def restricted_result(tmp_path: Path) -> dict[str, object]:
+    records = list((tmp_path / "restricted").glob("lgr_*.json"))
+    assert len(records) == 1
+    return json.loads(records[0].read_text())
+
+
+def test_no_semantic_or_bundle_change_passes_without_databricks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     patch_inputs(monkeypatch, changes())
     exit_code = assess(arguments(tmp_path))
-    result = json.loads((tmp_path / "assessment.json").read_text())
     assert exit_code == 0
-    assert result["status"] == "pass"
+    assert public_result(tmp_path)["outcome"] == "pass"
 
 
 @pytest.mark.parametrize("message", ["authentication failed", "warehouse unavailable"])
-def test_authentication_and_warehouse_failures_fail_closed(
+def test_authentication_and_warehouse_failures_fail_closed_without_public_details(
     message: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -74,13 +94,15 @@ def test_authentication_and_warehouse_failures_fail_closed(
 
     monkeypatch.setattr("lineage_guard.cli.StatementExecutor", fail_executor)
     exit_code = assess(arguments(tmp_path))
-    result = json.loads((tmp_path / "assessment.json").read_text())
+    public = (tmp_path / "assessment.json").read_text()
+    restricted = restricted_result(tmp_path)
     assert exit_code == 2
-    assert result["status"] == "error"
-    assert message in result["error"]
+    assert json.loads(public)["outcome"] == "error"
+    assert message not in public
+    assert message in json.dumps(restricted)
 
 
-def test_partial_missing_lineage_fails_closed(
+def test_partial_missing_lineage_is_explicit_in_restricted_evidence_and_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     patch_inputs(monkeypatch, changes(SOURCE, OTHER))
@@ -91,7 +113,27 @@ def test_partial_missing_lineage_fails_closed(
     monkeypatch.setattr("lineage_guard.cli.LineageRepository", lambda **_: repository)
 
     exit_code = assess(arguments(tmp_path))
-    result = json.loads((tmp_path / "assessment.json").read_text())
+    public = public_result(tmp_path)
+    restricted = restricted_result(tmp_path)
     assert exit_code == 2
-    assert result["status"] == "error"
-    assert OTHER in result["error"]
+    assert public["outcome"] == "error"
+    assert OTHER not in json.dumps(public)
+    assert OTHER in json.dumps(restricted)
+
+
+def test_public_outputs_have_identical_allowlisted_information(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_inputs(monkeypatch, changes())
+    assert assess(arguments(tmp_path)) == 0
+    public = public_result(tmp_path)
+    markdown = (tmp_path / "assessment.md").read_text()
+    assert set(public) == {
+        "schema_version",
+        "assessment_reference",
+        "outcome",
+        "message",
+    }
+    assert str(public["assessment_reference"]) in markdown
+    assert str(public["message"]) in markdown
+    assert "SENSITIVE_ASSET_METADATA" not in markdown

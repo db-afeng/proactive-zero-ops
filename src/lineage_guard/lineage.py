@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import re
 import time
 from collections import defaultdict
 from collections.abc import Iterable
 from typing import Any
 
-from lineage_guard.config import FQN_PATTERN
-from lineage_guard.models import LineageEdge
+from lineage_guard.models import EvidenceOrigin, LineageEdge
+
+FQN_PATTERN = re.compile(r"^[A-Za-z_][\w-]*\.[A-Za-z_][\w-]*\.[A-Za-z_][\w-]*$")
 
 
 class LineageQueryError(RuntimeError):
@@ -55,8 +57,14 @@ class StatementExecutor:
 
 class LineageGraph:
     def __init__(self, edges: Iterable[LineageEdge] = ()) -> None:
-        deduplicated: dict[tuple[str, str, str | None, str | None, str], LineageEdge] = {}
-        for edge in edges:
+        deduplicated: dict[tuple[str, str, str | None, str | None, str, str], LineageEdge] = {}
+        for original in edges:
+            edge = original.model_copy(
+                update={
+                    "source_table": original.source_table.lower(),
+                    "target_table": original.target_table.lower(),
+                }
+            )
             deduplicated[edge.key] = edge
         self.edges = list(deduplicated.values())
         self._adjacency: dict[str, set[str]] = defaultdict(set)
@@ -75,8 +83,32 @@ class LineageGraph:
     def downstream_tables(self) -> set[str]:
         return {edge.target_table for edge in self.edges}
 
-    def source_tables(self) -> set[str]:
-        return set(self._adjacency)
+    def source_tables(self, origin: EvidenceOrigin | None = None) -> set[str]:
+        if origin is None:
+            return set(self._adjacency)
+        return {edge.source_table for edge in self.edges if edge.origin == origin}
+
+    def edge_origins(self, source: str, target: str) -> set[EvidenceOrigin]:
+        source = source.lower()
+        target = target.lower()
+        return {
+            edge.origin
+            for edge in self.edges
+            if edge.source_table == source and edge.target_table == target
+        }
+
+    def path_evidence(self, path: list[str]) -> list[dict[str, object]]:
+        normalized = [part.lower() for part in path]
+        if not self.has_path(normalized):
+            return []
+        return [
+            {
+                "source": source,
+                "target": target,
+                "origins": sorted(origin.value for origin in self.edge_origins(source, target)),
+            }
+            for source, target in zip(normalized, normalized[1:], strict=False)
+        ]
 
     def paths_from(self, sources: Iterable[str], max_depth: int) -> list[list[str]]:
         paths: set[tuple[str, ...]] = set()
@@ -117,6 +149,10 @@ SELECT
   lower(source_column_name),
   lower(target_table_full_name),
   lower(target_column_name),
+  entity_type,
+  CAST(entity_id AS STRING),
+  CAST(entity_run_id AS STRING),
+  created_by,
   CAST(MAX(event_time) AS STRING)
 FROM system.access.column_lineage
 WHERE event_date >= dateadd(DAY, -{self.lookback_days}, current_date())
@@ -132,7 +168,12 @@ GROUP BY ALL
                 target_table=row[2],
                 target_column=row[3],
                 level="column",
-                event_time=row[4],
+                entity_type=row[4] if len(row) >= 9 else None,
+                entity_id=row[5] if len(row) >= 9 else None,
+                entity_run_id=row[6] if len(row) >= 9 else None,
+                created_by=row[7] if len(row) >= 9 else None,
+                event_time=row[8] if len(row) >= 9 else row[4],
+                origin=EvidenceOrigin.OBSERVED_LINEAGE,
             )
             for row in rows
             if row[0] and row[2]
@@ -144,13 +185,31 @@ GROUP BY ALL
             f"""
 SELECT
   lower(source_table_full_name),
-  lower(target_table_full_name),
-  COALESCE(target_type, 'TABLE'),
+  COALESCE(
+    lower(target_table_full_name),
+    CASE
+      WHEN entity_type IS NOT NULL AND COALESCE(entity_id, entity_run_id) IS NOT NULL
+      THEN concat(
+        'databricks://',
+        lower(entity_type),
+        '/',
+        CAST(COALESCE(entity_id, entity_run_id) AS STRING)
+      )
+    END
+  ),
+  COALESCE(target_type, entity_type, 'ENTITY'),
+  entity_type,
+  CAST(entity_id AS STRING),
+  CAST(entity_run_id AS STRING),
+  created_by,
   CAST(MAX(event_time) AS STRING)
 FROM system.access.table_lineage
 WHERE event_date >= dateadd(DAY, -{self.lookback_days}, current_date())
   AND lower(source_table_full_name) IN ({table_list})
-  AND target_table_full_name IS NOT NULL
+  AND (
+    target_table_full_name IS NOT NULL
+    OR (entity_type IS NOT NULL AND COALESCE(entity_id, entity_run_id) IS NOT NULL)
+  )
 GROUP BY ALL
 """.strip()
         )
@@ -160,7 +219,12 @@ GROUP BY ALL
                 target_table=row[1],
                 target_type=row[2] or "TABLE",
                 level="table",
-                event_time=row[3],
+                entity_type=row[3] if len(row) >= 8 else None,
+                entity_id=row[4] if len(row) >= 8 else None,
+                entity_run_id=row[5] if len(row) >= 8 else None,
+                created_by=row[6] if len(row) >= 8 else None,
+                event_time=row[7] if len(row) >= 8 else row[3],
+                origin=EvidenceOrigin.OBSERVED_LINEAGE,
             )
             for row in rows
             if row[0] and row[1]

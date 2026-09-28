@@ -2765,7 +2765,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6,<7" },
     { name = "pyyaml", specifier = ">=6.0.2,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9,<1" },
-    { name = "sqlglot", specifier = ">=27.20,<29" },
+    { name = "sqlglot", specifier = "==28.10.1" },
 ]
 provides-extras = ["dev"]
 

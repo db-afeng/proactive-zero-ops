@@ -225,9 +225,7 @@ def test_addition_deletion_file_rename_and_dataset_rename_are_visible() -> None:
         ("CREATE OR REFRESH MATERIALIZED VIEW main.s.t AS SELECT ( FROM x", "parse_error"),
     ],
 )
-def test_unsupported_syntax_is_reported_never_silently_skipped(
-    sql: str, issue_code: str
-) -> None:
+def test_unsupported_syntax_is_reported_never_silently_skipped(sql: str, issue_code: str) -> None:
     document = parse_sql_document(sql, path="unsupported.sql")
 
     assert not document.complete
@@ -247,6 +245,34 @@ def test_unresolved_target_variable_is_an_explicit_coverage_limitation() -> None
     assert document.statements
     assert [issue.code for issue in document.issues] == ["unresolved_variable"]
     assert "__unresolved_schema__" in document.output_datasets[0]
+
+
+def test_schema_only_create_discovers_declared_output_columns() -> None:
+    document = parse_sql_document(
+        "CREATE TABLE main.s.contract (id BIGINT, balance DECIMAL(18, 2))",
+        path="contract.sql",
+    )
+
+    assert document.complete, document.issues
+    assert [column.name for column in document.statements[0].output_columns] == [
+        "id",
+        "balance",
+    ]
+
+
+def test_merge_without_enumerable_output_columns_is_an_explicit_limitation() -> None:
+    document = parse_sql_document(
+        """
+        MERGE INTO main.s.target AS t
+        USING main.s.source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET t.balance = s.balance
+        """,
+        path="merge.sql",
+    )
+
+    assert not document.complete
+    assert any(issue.code == "output_columns_unavailable" for issue in document.issues)
 
 
 def parse_repo_sql(relative_path: str):

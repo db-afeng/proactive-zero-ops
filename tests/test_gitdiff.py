@@ -193,6 +193,28 @@ def test_target_catalog_and_schema_changes_change_affected_dataset_identities(
     )
 
 
+def test_unqualified_pipeline_tables_use_selected_target_catalog_and_schema(
+    tmp_path: Path,
+) -> None:
+    sql = """
+CREATE OR REFRESH MATERIALIZED VIEW accounts AS
+SELECT account_id, balance FROM STREAM(LIVE.raw_accounts);
+"""
+    repo, revision = create_pipeline_repo(tmp_path, {"accounts.sql": sql})
+
+    changes = collect_changes(repo, revision, revision, target="dev")
+    statement = changes.proposed.documents[0].analysis.statements[0]
+
+    assert changes.complete, changes.issues
+    assert statement.output_dataset == "dev_catalog.dev_bronze.accounts"
+    assert statement.input_tables == ("dev_catalog.dev_bronze.raw_accounts",)
+    assert any(
+        edge.source_table == "dev_catalog.dev_bronze.raw_accounts"
+        and edge.target_table == "dev_catalog.dev_bronze.accounts"
+        for edge in changes.proposed_code_edges
+    )
+
+
 def test_pipeline_source_path_change_changes_affected_datasets_without_sql_edits(
     tmp_path: Path,
 ) -> None:

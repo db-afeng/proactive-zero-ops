@@ -175,7 +175,9 @@ def test_pipeline_glob_expands_only_files_in_the_revision(tmp_path: Path) -> Non
 def test_target_resource_override_path_is_relative_to_declaring_yaml(tmp_path: Path) -> None:
     repo = initialize_repo(tmp_path)
     files = base_bundle()
-    files["databricks.yml"] = str(files["databricks.yml"]) + """
+    files["databricks.yml"] = (
+        str(files["databricks.yml"])
+        + """
     resources:
       pipelines:
         risk:
@@ -184,6 +186,7 @@ def test_target_resource_override_path_is_relative_to_declaring_yaml(tmp_path: P
             - file:
                 path: ./src/override.sql
 """
+    )
     files["src/override.sql"] = "SELECT 2\n"
     revision = write_files(repo, files)
 

@@ -13,7 +13,7 @@ dependencies = [
   "databricks-sdk>=0.65.0,<1",
   "pydantic>=2.10,<3",
   "PyYAML>=6.0.2,<7",
-  "sqlglot>=27.20,<29",
+  "sqlglot==28.10.1",
 ]
 
 [project.optional-dependencies]

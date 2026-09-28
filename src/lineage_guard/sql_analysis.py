@@ -26,9 +26,7 @@ DIALECT = "databricks"
 
 IssueSeverity: TypeAlias = Literal["warning", "error"]
 DiscoveryCertainty: TypeAlias = Literal["complete", "partial", "failed"]
-StatementChangeKind: TypeAlias = Literal[
-    "added", "deleted", "renamed", "modified", "unchanged"
-]
+StatementChangeKind: TypeAlias = Literal["added", "deleted", "renamed", "modified", "unchanged"]
 DocumentChangeKind: TypeAlias = Literal[
     "added", "deleted", "renamed", "renamed_modified", "modified", "unchanged"
 ]
@@ -626,7 +624,27 @@ def _analyze_statement(
 
     output_dataset = _table_name(output) if output is not None else None
     inputs = _extract_inputs(query, output_dataset)
-    output_columns, column_issues = _extract_output_columns(query)
+    if (
+        isinstance(tree, exp.Create)
+        and isinstance(tree.this, exp.Schema)
+        and tree.expression is None
+    ):
+        output_columns = _extract_schema_columns(tree.this)
+        column_issues: tuple[ParseIssue, ...] = ()
+    else:
+        output_columns, column_issues = _extract_output_columns(query)
+    if output_dataset and not output_columns:
+        column_issues = (
+            *column_issues,
+            ParseIssue(
+                code="output_columns_unavailable",
+                message=(
+                    f"Output columns could not be determined for {statement_kind}; "
+                    "change analysis is incomplete"
+                ),
+                evidence=evidence_sql[:500],
+            ),
+        )
     joins = _extract_joins(query)
     filters = _extract_filters(query)
     casts = _extract_casts(query)
@@ -695,11 +713,7 @@ def _semantic_properties(tree: exp.Expression) -> list[str]:
 
 
 def _extract_inputs(query: exp.Expression, output_dataset: str | None) -> tuple[InputSource, ...]:
-    cte_names = {
-        cte.alias_or_name.lower()
-        for cte in query.find_all(exp.CTE)
-        if cte.alias_or_name
-    }
+    cte_names = {cte.alias_or_name.lower() for cte in query.find_all(exp.CTE) if cte.alias_or_name}
     sources: list[InputSource] = []
     for table in query.find_all(exp.Table):
         if isinstance(table.this, exp.Anonymous) and table.this.name.lower() == "read_files":
@@ -793,6 +807,26 @@ def _extract_output_columns(
             )
         )
     return tuple(columns), tuple(issues)
+
+
+def _extract_schema_columns(schema: exp.Schema) -> tuple[OutputColumn, ...]:
+    columns: list[OutputColumn] = []
+    for ordinal, definition in enumerate(schema.expressions):
+        if not isinstance(definition, exp.ColumnDef):
+            continue
+        name = definition.alias_or_name.lower()
+        data_type = definition.args.get("kind")
+        expression_sql = _canonical_sql(data_type or definition)
+        columns.append(
+            OutputColumn(
+                ordinal=ordinal,
+                name=name,
+                expression_sql=expression_sql,
+                expression_ast=_normalized_ast(data_type or definition),
+                source_columns=(),
+            )
+        )
+    return tuple(columns)
 
 
 def _extract_joins(query: exp.Expression) -> tuple[Join, ...]:

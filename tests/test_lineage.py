@@ -1,5 +1,5 @@
 from lineage_guard.lineage import LineageGraph, LineageRepository
-from lineage_guard.models import LineageEdge
+from lineage_guard.models import EvidenceOrigin, LineageEdge
 
 
 def edge(source: str, target: str, level: str = "table") -> LineageEdge:
@@ -33,6 +33,18 @@ def test_graph_deduplicates_edges_and_enumerates_verified_paths() -> None:
     assert graph.paths_from({"main.bronze.accounts"}, max_depth=5) == [
         ["main.bronze.accounts", "main.silver.exposure"],
         ["main.bronze.accounts", "main.silver.exposure", "main.gold.expected_loss"],
+    ]
+
+
+def test_code_and_observed_dependency_evidence_remain_distinct() -> None:
+    observed = edge("main.bronze.accounts", "main.silver.exposure")
+    proposed = observed.model_copy(update={"origin": EvidenceOrigin.PROPOSED_CODE})
+    graph = LineageGraph([observed, proposed])
+
+    assert len(graph.edges) == 2
+    assert graph.path_evidence([observed.source_table, observed.target_table])[0]["origins"] == [
+        "observed_lineage",
+        "proposed_code",
     ]
 
 
@@ -73,3 +85,31 @@ def test_repository_walks_breadth_first() -> None:
     )
     assert any("event_date >=" in call for call in executor.calls)
     assert len(graph.edges) == 2
+
+
+class EntityExecutor:
+    def query(self, statement: str) -> list[list[str | None]]:
+        if "table_lineage" in statement:
+            return [
+                [
+                    "main.gold.expected_loss",
+                    "databricks://dashboard/abc-123",
+                    "DASHBOARD",
+                    "DASHBOARD",
+                    "abc-123",
+                    "run-1",
+                    "owner@example.com",
+                    "2026-09-28 00:00:00",
+                ]
+            ]
+        return []
+
+
+def test_repository_includes_external_entity_consumers_without_traversing_them() -> None:
+    repository = LineageRepository(executor=EntityExecutor(), lookback_days=30)  # type: ignore[arg-type]
+    graph = repository.downstream_graph({"main.gold.expected_loss"}, max_depth=5)
+
+    edge = graph.edges[0]
+    assert edge.target_table == "databricks://dashboard/abc-123"
+    assert edge.entity_id == "abc-123"
+    assert edge.created_by == "owner@example.com"

@@ -9,7 +9,6 @@ VALID = {
     "severity": "none",
     "confidence": 0.99,
     "summary": "No breaking contract change.",
-    "changed_columns": [],
     "impacts": [],
 }
 
@@ -59,11 +58,7 @@ def test_structured_output_schema_rejects_nested_extra_fields() -> None:
     schema = ModelAssessment.model_json_schema()
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == set(schema["properties"])
-    assert schema["$defs"]["ChangedColumn"]["additionalProperties"] is False
     assert schema["$defs"]["Impact"]["additionalProperties"] is False
-    assert set(schema["$defs"]["ChangedColumn"]["required"]) == set(
-        schema["$defs"]["ChangedColumn"]["properties"]
-    )
     assert set(schema["$defs"]["Impact"]["required"]) == set(
         schema["$defs"]["Impact"]["properties"]
     )

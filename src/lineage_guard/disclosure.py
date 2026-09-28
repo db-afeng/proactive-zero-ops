@@ -205,6 +205,8 @@ class RestrictedEvidenceStore:
         metadata = target.lstat()
         if not stat.S_ISREG(metadata.st_mode):
             raise PermissionError("restricted evidence record must be a regular file")
+        if metadata.st_uid != os.geteuid():
+            raise PermissionError("restricted evidence record must be owned by the current user")
         if stat.S_IMODE(metadata.st_mode) != 0o600:
             raise PermissionError("restricted evidence record must have mode 0600")
         record = json.loads(target.read_text())
@@ -219,6 +221,8 @@ class RestrictedEvidenceStore:
         metadata = self.root.lstat()
         if not stat.S_ISDIR(metadata.st_mode):
             raise ValueError("restricted evidence root must be a directory")
+        if metadata.st_uid != os.geteuid():
+            raise PermissionError("restricted evidence root must be owned by the current user")
         os.chmod(self.root, 0o700, follow_symlinks=False)
 
     def _record_path(self, reference: AssessmentReference) -> Path:

@@ -1,8 +1,8 @@
 from lineage_guard.evaluate import evaluate_assessment
 from lineage_guard.lineage import LineageGraph
 from lineage_guard.models import (
-    ChangedColumn,
     Decision,
+    EvidenceOrigin,
     Impact,
     LineageEdge,
     ModelAssessment,
@@ -35,15 +35,6 @@ def assessment(*, confidence: float = 0.95, asset: str = GOLD) -> ModelAssessmen
         severity=Severity.HIGH,
         confidence=confidence,
         summary="A numeric balance became formatted text.",
-        changed_columns=[
-            ChangedColumn(
-                table=SOURCE,
-                column="outstanding_balance",
-                old_contract="DECIMAL(18,2)",
-                new_contract="STRING",
-                evidence="The changed expression applies currency formatting.",
-            )
-        ],
         impacts=[
             Impact(
                 asset=asset,
@@ -76,7 +67,6 @@ def test_safe_governed_change_passes() -> None:
         severity=Severity.LOW,
         confidence=0.98,
         summary="Only a descriptive comment changed.",
-        changed_columns=[],
         impacts=[],
     )
     result = evaluate_assessment(safe, graph(), {SOURCE}, ["loan_accounts.sql"], 0.8)
@@ -94,41 +84,38 @@ def test_hallucinated_path_cannot_block() -> None:
     assert any("Rejected ungrounded" in warning for warning in result.warnings)
 
 
-def test_column_claim_for_unchanged_table_is_rejected() -> None:
-    fake = assessment().model_copy(
-        update={
-            "changed_columns": [
-                ChangedColumn(
-                    table="proactive_zero_ops_catalog.proactive_zero_ops_bronze.collateral",
-                    column="appraised_value",
-                    old_contract="DECIMAL",
-                    new_contract="STRING",
-                    evidence="Not present in the pull request.",
-                )
-            ]
-        }
+def test_proposed_code_path_is_distinguished_and_can_ground_an_impact() -> None:
+    code_graph = LineageGraph(
+        [
+            LineageEdge(
+                source_table=SOURCE,
+                target_table=SILVER,
+                level="table",
+                origin=EvidenceOrigin.PROPOSED_CODE,
+            ),
+            LineageEdge(
+                source_table=SILVER,
+                target_table=GOLD,
+                level="table",
+                origin=EvidenceOrigin.PROPOSED_CODE,
+            ),
+        ]
     )
-    result = evaluate_assessment(fake, graph(), {SOURCE}, ["loan_accounts.sql"], 0.8)
+    result = evaluate_assessment(assessment(), code_graph, {SOURCE}, ["loan_accounts.sql"], 0.8)
     assert result.status == "block"
-    assert not result.changed_columns
-    assert any("column claim" in warning for warning in result.warnings)
+    assert code_graph.path_evidence([SOURCE, SILVER, GOLD])[0]["origins"] == ["proposed_code"]
 
 
-def test_hallucinated_column_on_changed_table_is_rejected() -> None:
-    fake = assessment().model_copy(
-        update={
-            "changed_columns": [
-                ChangedColumn(
-                    table=SOURCE,
-                    column="invented_balance",
-                    old_contract="DECIMAL",
-                    new_contract="STRING",
-                    evidence="Not present in observed column lineage.",
-                )
-            ]
-        }
+def test_incomplete_discovery_cannot_be_overridden_by_model_confidence() -> None:
+    result = evaluate_assessment(
+        assessment(),
+        graph(),
+        {SOURCE},
+        ["loan_accounts.sql"],
+        0.8,
+        discovery_complete=False,
+        coverage_limitations=["unsupported Lakeflow syntax"],
     )
-    result = evaluate_assessment(fake, graph(), {SOURCE}, ["loan_accounts.sql"], 0.8)
-    assert result.status == "block"
-    assert not result.changed_columns
-    assert any("not observed" in warning for warning in result.warnings)
+    assert result.status == "error"
+    assert result.exit_code == 2
+    assert result.discovery_certainty.value == "incomplete"
