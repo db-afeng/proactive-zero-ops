@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.shared.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "target": "ES2022",
+    "types": ["node"]
+  },
+  "include": ["./*.ts"]
+}

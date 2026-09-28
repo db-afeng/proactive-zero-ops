@@ -24,12 +24,15 @@ import stat
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
+from urllib.parse import quote, urlsplit, urlunsplit
 
 PUBLIC_SCHEMA_VERSION = 1
+RESTRICTED_SCHEMA_VERSION = 2
 PUBLIC_MARKER = "<!-- proactive-zero-ops-lineage-guard -->"
 
 # This is enforcement policy in trusted base-branch code.  It is intentionally
@@ -43,6 +46,11 @@ _PUBLIC_MESSAGES: Mapping[str, str] = MappingProxyType(
     }
 )
 _REFERENCE_PATTERN = re.compile(r"^lgr_[A-Za-z0-9_-]{32}$")
+_REPOSITORY_PATTERN = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,98}[A-Za-z0-9])?/"
+    r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,98}[A-Za-z0-9])?$"
+)
+_COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40,64}$")
 
 
 class PublicOutcome(StrEnum):
@@ -78,6 +86,38 @@ class AssessmentReference:
 
 
 @dataclass(frozen=True)
+class AssessmentSource:
+    """Trusted GitHub identity and exact revision pair for an assessment."""
+
+    repository: str
+    pull_request_number: int
+    base_sha: str
+    head_sha: str
+    provider: Literal["github"] = field(default="github", init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.repository, str) or not _REPOSITORY_PATTERN.fullmatch(
+            self.repository
+        ):
+            raise ValueError("repository must be an owner/name GitHub repository")
+        if not isinstance(self.pull_request_number, int) or self.pull_request_number < 1:
+            raise ValueError("pull request number must be positive")
+        if not isinstance(self.base_sha, str) or not _COMMIT_PATTERN.fullmatch(self.base_sha):
+            raise ValueError("base SHA must be a full lowercase hexadecimal commit ID")
+        if not isinstance(self.head_sha, str) or not _COMMIT_PATTERN.fullmatch(self.head_sha):
+            raise ValueError("head SHA must be a full lowercase hexadecimal commit ID")
+
+    def as_dict(self) -> dict[str, str | int]:
+        return {
+            "provider": self.provider,
+            "repository": self.repository,
+            "pull_request_number": self.pull_request_number,
+            "base_sha": self.base_sha,
+            "head_sha": self.head_sha,
+        }
+
+
+@dataclass(frozen=True)
 class PublicDisclosure:
     """The complete allowlisted representation for any public surface."""
 
@@ -105,7 +145,9 @@ class RestrictedEvidence:
     """Full evidence destined only for an authenticated, authorized store."""
 
     reference: AssessmentReference
+    source: AssessmentSource
     evidence: Any = field(repr=False)
+    created_at: str = field(default_factory=lambda: _utc_now())
     classification: Literal["restricted"] = field(default="restricted", init=False)
     authentication: Literal["required"] = field(default="required", init=False)
     viewer_authorization: Literal["required"] = field(default="required", init=False)
@@ -129,8 +171,10 @@ class RestrictedEvidence:
         """
 
         return {
-            "schema_version": PUBLIC_SCHEMA_VERSION,
+            "schema_version": RESTRICTED_SCHEMA_VERSION,
             "assessment_reference": self.reference.value,
+            "created_at": _validate_timestamp(self.created_at),
+            "source": self.source.as_dict(),
             "classification": self.classification,
             "authentication": self.authentication,
             "viewer_authorization": self.viewer_authorization,
@@ -151,7 +195,7 @@ class DisclosureSet:
 
 
 class RestrictedEvidenceStore:
-    """Owner-only local evidence storage for the v1 service-principal flow.
+    """Owner-only staging storage for the restricted service-principal flow.
 
     The root directory is forced to mode ``0700`` and records are atomically
     installed with mode ``0600``.  On a dedicated self-hosted runner, the OS
@@ -192,6 +236,7 @@ class RestrictedEvidenceStore:
                 os.fsync(handle.fileno())
             os.replace(temporary, target)
             os.chmod(target, 0o600, follow_symlinks=False)
+            _fsync_directory(self.root)
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
@@ -201,18 +246,40 @@ class RestrictedEvidenceStore:
     def read(self, reference: AssessmentReference) -> dict[str, Any]:
         """Read a record after verifying that its owner-only mode remains set."""
 
-        target = self._record_path(reference)
-        metadata = target.lstat()
-        if not stat.S_ISREG(metadata.st_mode):
-            raise PermissionError("restricted evidence record must be a regular file")
-        if metadata.st_uid != os.geteuid():
-            raise PermissionError("restricted evidence record must be owned by the current user")
-        if stat.S_IMODE(metadata.st_mode) != 0o600:
-            raise PermissionError("restricted evidence record must have mode 0600")
-        record = json.loads(target.read_text())
-        if not isinstance(record, dict):
-            raise ValueError("restricted evidence record must be a JSON object")
+        payload = self.serialized_record(reference)
+        record = json.loads(payload)
         return record
+
+    def serialized_record(self, reference: AssessmentReference) -> bytes:
+        """Return a validated envelope exactly as it was atomically serialized."""
+
+        payload = self.read_bytes(reference)
+        record = json.loads(payload)
+        _validate_restricted_record(record, expected_reference=reference)
+        return payload
+
+    def read_bytes(self, reference: AssessmentReference) -> bytes:
+        """Read exact serialized bytes without following a replaced symbolic link."""
+
+        target = self._record_path(reference)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(target, flags)
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise PermissionError("restricted evidence record must be a regular file")
+            if metadata.st_uid != os.geteuid():
+                raise PermissionError(
+                    "restricted evidence record must be owned by the current user"
+                )
+            if stat.S_IMODE(metadata.st_mode) != 0o600:
+                raise PermissionError("restricted evidence record must have mode 0600")
+            with os.fdopen(descriptor, "rb") as handle:
+                descriptor = -1
+                return handle.read()
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
 
     def _prepare_root(self) -> None:
         if self.root.is_symlink():
@@ -234,7 +301,9 @@ def prepare_disclosures(
     *,
     status: str,
     evidence: Any,
+    source: AssessmentSource,
     reference: AssessmentReference | None = None,
+    created_at: str | None = None,
 ) -> DisclosureSet:
     """Split an assessment into fixed public output and restricted evidence.
 
@@ -252,12 +321,18 @@ def prepare_disclosures(
         public=PublicDisclosure(reference=assessment_reference, outcome=outcome),
         restricted=RestrictedEvidence(
             reference=assessment_reference,
+            source=source,
             evidence=evidence,
+            **({"created_at": created_at} if created_at is not None else {}),
         ),
     )
 
 
-def render_public_markdown(disclosure: PublicDisclosure) -> str:
+def render_public_markdown(
+    disclosure: PublicDisclosure,
+    *,
+    assessment_base_url: str | None = None,
+) -> str:
     """Render the approved public content for comments and job summaries."""
 
     icons = {
@@ -266,21 +341,32 @@ def render_public_markdown(disclosure: PublicDisclosure) -> str:
         PublicOutcome.BLOCK: "⛔",
         PublicOutcome.ERROR: "❌",
     }
-    return "\n".join(
+    lines = [
+        PUBLIC_MARKER,
+        "## Downstream impact assessment",
+        "",
+        f"{icons[disclosure.outcome]} **{disclosure.outcome.value.upper()}**",
+        "",
+        disclosure.message,
+        "",
+        f"Assessment reference: `{disclosure.reference.value}`",
+        "",
+    ]
+    if assessment_base_url is not None:
+        lines.extend(
+            [
+                "[Review authorized impact and propose a fix]"
+                f"({_assessment_url(assessment_base_url, disclosure.reference)})",
+                "",
+            ]
+        )
+    lines.extend(
         [
-            PUBLIC_MARKER,
-            "## Downstream impact assessment",
-            "",
-            f"{icons[disclosure.outcome]} **{disclosure.outcome.value.upper()}**",
-            "",
-            disclosure.message,
-            "",
-            f"Assessment reference: `{disclosure.reference.value}`",
-            "",
-            ("_Detailed evidence is restricted and requires authenticated, authorized access._"),
+            "_Detailed evidence is restricted and requires authenticated, authorized access._",
             "",
         ]
     )
+    return "\n".join(lines)
 
 
 def render_public_log(disclosure: PublicDisclosure) -> str:
@@ -297,6 +383,116 @@ def serialize_public_artifact(disclosure: PublicDisclosure) -> bytes:
     """Create the only payload suitable for a downloadable GitHub artifact."""
 
     return (json.dumps(disclosure.as_dict(), sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def deserialize_public_artifact(payload: bytes | str) -> PublicDisclosure:
+    """Parse only the exact allowlisted public schema."""
+
+    record = json.loads(payload)
+    if not isinstance(record, dict):
+        raise ValueError("public assessment must be a JSON object")
+    required = {"schema_version", "assessment_reference", "outcome", "message"}
+    if set(record) != required or record.get("schema_version") != PUBLIC_SCHEMA_VERSION:
+        raise ValueError("public assessment does not match schema version 1")
+    try:
+        disclosure = PublicDisclosure(
+            reference=AssessmentReference(record["assessment_reference"]),
+            outcome=PublicOutcome(record["outcome"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("public assessment contains invalid values") from exc
+    if record["message"] != disclosure.message:
+        raise ValueError("public assessment message is not allowlisted")
+    return disclosure
+
+
+def _assessment_url(base_url: str, reference: AssessmentReference) -> str:
+    if base_url != base_url.strip():
+        raise ValueError("assessment app URL must not contain surrounding whitespace")
+    parsed = urlsplit(base_url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("assessment app URL must be an HTTPS URL without credentials or query")
+    path = parsed.path.rstrip("/") + "/assessments/" + quote(reference.value, safe="")
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _validate_timestamp(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("restricted evidence timestamp must be RFC 3339")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("restricted evidence timestamp must be RFC 3339") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("restricted evidence timestamp must include a timezone")
+    return value
+
+
+def _validate_restricted_record(
+    record: Any,
+    *,
+    expected_reference: AssessmentReference,
+) -> None:
+    required = {
+        "schema_version",
+        "assessment_reference",
+        "created_at",
+        "source",
+        "classification",
+        "authentication",
+        "viewer_authorization",
+        "assessment_principal",
+        "evidence",
+    }
+    if not isinstance(record, dict) or set(record) != required:
+        raise ValueError("restricted evidence record does not match the versioned envelope")
+    if record["schema_version"] != RESTRICTED_SCHEMA_VERSION:
+        raise ValueError("restricted evidence schema version is unsupported")
+    if record["assessment_reference"] != expected_reference.value:
+        raise ValueError("restricted evidence reference does not match its file name")
+    if record["classification"] != "restricted":
+        raise ValueError("restricted evidence classification is invalid")
+    if record["authentication"] != "required" or record["viewer_authorization"] != "required":
+        raise ValueError("restricted evidence authorization policy is invalid")
+    if record["assessment_principal"] != "service_principal":
+        raise ValueError("restricted evidence assessment principal is invalid")
+    _validate_timestamp(record["created_at"])
+    source = record["source"]
+    if not isinstance(source, dict) or set(source) != {
+        "provider",
+        "repository",
+        "pull_request_number",
+        "base_sha",
+        "head_sha",
+    }:
+        raise ValueError("restricted evidence source metadata is invalid")
+    if source.get("provider") != "github":
+        raise ValueError("restricted evidence source provider is invalid")
+    AssessmentSource(
+        repository=source.get("repository"),
+        pull_request_number=source.get("pull_request_number"),
+        base_sha=source.get("base_sha"),
+        head_sha=source.get("head_sha"),
+    )
+
+
+def _fsync_directory(directory: Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _jsonable(value: Any) -> Any:

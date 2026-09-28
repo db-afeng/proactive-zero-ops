@@ -27,6 +27,8 @@ jobs:
       DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
       DATABRICKS_WAREHOUSE_ID: ${{ vars.DATABRICKS_WAREHOUSE_ID }}
       DATABRICKS_SERVING_ENDPOINT: ${{ vars.DATABRICKS_SERVING_ENDPOINT }}
+      LINEAGE_GUARD_RESTRICTED_VOLUME_ROOT: ${{ vars.LINEAGE_GUARD_RESTRICTED_VOLUME_ROOT || '/Volumes/proactive_zero_ops_catalog/proactive_zero_ops_guard/restricted_assessments' }}
+      LINEAGE_IMPACT_STUDIO_URL: ${{ vars.LINEAGE_IMPACT_STUDIO_URL }}
       # This environment/repository variable is controlled by trusted CI
       # administrators, never by pull-request bundle configuration.
       DATABRICKS_BUNDLE_TARGET: ${{ vars.DATABRICKS_BUNDLE_TARGET || 'dev' }}
@@ -99,6 +101,8 @@ jobs:
           "$LINEAGE_GUARD_PYTHON" -m lineage_guard assess \
             --base "$BASE_SHA" \
             --head "$HEAD_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --pull-request-number "${{ github.event.pull_request.number }}" \
             --target "$DATABRICKS_BUNDLE_TARGET" \
             --output assessment.json \
             --markdown-output assessment.md \
@@ -110,12 +114,51 @@ jobs:
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
           exit 0
 
+      - name: Publish restricted assessment evidence
+        id: publication
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          published=false
+          publication_log=/dev/null
+          if [[ -n "${LINEAGE_GUARD_RESTRICTED_DIR:-}" \
+            && -d "$LINEAGE_GUARD_RESTRICTED_DIR" \
+            && ! -L "$LINEAGE_GUARD_RESTRICTED_DIR" ]]; then
+            publication_log="$LINEAGE_GUARD_RESTRICTED_DIR/publication.log"
+          fi
+          if [[ -n "${LINEAGE_GUARD_PYTHON:-}" && -x "$LINEAGE_GUARD_PYTHON" ]]; then
+            "$LINEAGE_GUARD_PYTHON" -m lineage_guard publish-evidence \
+              --public-assessment assessment.json \
+              --restricted-evidence-dir "$LINEAGE_GUARD_RESTRICTED_DIR" \
+              --volume-root "$LINEAGE_GUARD_RESTRICTED_VOLUME_ROOT" \
+              --receipt-output "$LINEAGE_GUARD_RESTRICTED_DIR/publication-receipt.json" \
+              > "$publication_log" 2>&1
+            if [[ $? -eq 0 ]]; then
+              published=true
+              assessment_reference="$($LINEAGE_GUARD_PYTHON -c \
+                'from pathlib import Path; from lineage_guard.disclosure import deserialize_public_artifact; print(deserialize_public_artifact(Path("assessment.json").read_bytes()).reference.value)' \
+                2>> "$publication_log")"
+              if [[ "$assessment_reference" =~ ^lgr_[A-Za-z0-9_-]{32}$ ]]; then
+                echo "assessment_reference=$assessment_reference" >> "$GITHUB_OUTPUT"
+              else
+                published=false
+              fi
+            fi
+          fi
+          if [[ "$publication_log" != /dev/null ]]; then
+            chmod 0600 "$publication_log"
+          fi
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+          exit 0
+
       - name: Prepare allowlisted public assessment
         id: public
         if: always()
         shell: bash
         env:
           CHECKER_EXIT_CODE: ${{ steps.assessment.outputs.exit_code || '2' }}
+          EVIDENCE_PUBLISHED: ${{ steps.publication.outputs.published || 'false' }}
         run: |
           umask 077
           public_python="${LINEAGE_GUARD_PYTHON:-}"
@@ -145,10 +188,11 @@ jobs:
           _Detailed evidence is restricted and requires authenticated, authorized access._
           MARKDOWN
             echo "exit_code=2" >> "$GITHUB_OUTPUT"
+            echo "assessment_reference=lgr_T5Yg2b1Kq9Vw4Hd7Nx3Rc8Zm6Pf0JsUa" >> "$GITHUB_OUTPUT"
             chmod 0644 assessment.json assessment.md
             exit 0
           fi
-          "$public_python" - "$GITHUB_OUTPUT" "$CHECKER_EXIT_CODE" <<'PY' \
+          "$public_python" - "$GITHUB_OUTPUT" "$CHECKER_EXIT_CODE" "$EVIDENCE_PUBLISHED" <<'PY' \
             > "$public_log" 2>&1
           import json
           import re
@@ -185,6 +229,7 @@ jobs:
                   and isinstance(reference, str)
                   and re.fullmatch(r"lgr_[A-Za-z0-9_-]{32}", reference) is not None
                   and sys.argv[2] == exit_codes[outcome]
+                  and sys.argv[3] == "true"
               )
           except Exception:
               valid = False
@@ -225,11 +270,31 @@ jobs:
           Path("assessment.md").write_text(markdown, encoding="utf-8")
           with Path(sys.argv[1]).open("a", encoding="utf-8") as output:
               output.write(f"exit_code={published_exit_code}\n")
+              output.write(f"assessment_reference={public['assessment_reference']}\n")
           PY
           if [[ "$public_log" != /dev/null ]]; then
             chmod 0600 "$public_log"
           fi
           chmod 0644 assessment.json assessment.md
+
+      - name: Add authorized assessment link
+        if: >-
+          ${{ always()
+              && steps.public.outcome == 'success'
+              && steps.publication.outputs.published == 'true'
+              && steps.public.outputs.assessment_reference == steps.publication.outputs.assessment_reference }}
+        shell: bash
+        run: |
+          if [[ -z "${LINEAGE_IMPACT_STUDIO_URL:-}" ]]; then
+            echo "LINEAGE_IMPACT_STUDIO_URL must be configured before assessment links are enabled." >&2
+            exit 1
+          fi
+          "$LINEAGE_GUARD_PYTHON" -m lineage_guard render-public \
+            --input assessment.json \
+            --markdown-output assessment.md \
+            --publication-receipt "$LINEAGE_GUARD_RESTRICTED_DIR/publication-receipt.json" \
+            --volume-root "$LINEAGE_GUARD_RESTRICTED_VOLUME_ROOT" \
+            --assessment-base-url "$LINEAGE_IMPACT_STUDIO_URL"
 
       - name: Write job summary
         if: ${{ always() && steps.public.outcome == 'success' }}
