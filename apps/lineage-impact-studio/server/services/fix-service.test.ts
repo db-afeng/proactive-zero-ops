@@ -104,6 +104,52 @@ describe('FixService failure handling', () => {
     );
   });
 
+  it('binds a managed session that reports a repository clone failure during dispatch', async () => {
+    const queued = session('queued');
+    const failed = session(
+      'failed',
+      'Omnigent could not clone this private repository. Configure a Git credential for the Omnigent execution identity and try again.',
+      'provider-session'
+    );
+    const repository = testRepository();
+    vi.spyOn(repository, 'createOmnigentSession').mockResolvedValue(queued);
+    const transition = vi.spyOn(repository, 'transitionOmnigentSession').mockResolvedValue(failed);
+    const github = testGitHub();
+    vi.spyOn(github, 'getValidatedPullRequest').mockResolvedValue(pull);
+    const omnigent = testOmnigent();
+    vi.spyOn(omnigent, 'createManagedSession').mockResolvedValue({
+      authMode: 'service-principal',
+      value: {
+        id: 'provider-session',
+        status: 'failed',
+        runnerOnline: false,
+        hostOnline: false,
+        sandboxStage: 'failed',
+        error:
+          'Omnigent could not clone this private repository. Configure a Git credential for the Omnigent execution identity and try again.',
+      },
+    });
+    const service = new FixService(repository, github, omnigent);
+
+    await expect(
+      service.start({
+        actorSubject: ACTOR,
+        assessment,
+        sourceEvidence,
+        guidance: 'Preserve the consumer contract.',
+        credential,
+        omnigentAuth: { oboToken: 'obo-token' },
+      })
+    ).resolves.toEqual(failed);
+    expect(transition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'failed',
+        expectedStatuses: ['queued'],
+        providerSessionId: 'provider-session',
+      })
+    );
+  });
+
   it('fails closed when an idle Omnigent session produced no source changes', async () => {
     const running = session('running', 'Omnigent is proposing a fix.', 'provider-session');
     const validating = session('validating', 'Validating.', 'provider-session');

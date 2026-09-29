@@ -83,6 +83,16 @@ export class FixService {
         },
         input.omnigentAuth
       );
+      if (created.value.status === 'failed' || created.value.sandboxStage === 'failed') {
+        return await this.repository.transitionOmnigentSession({
+          actorSubject: input.actorSubject,
+          sessionId: local.id,
+          expectedStatuses: ['queued'],
+          status: 'failed',
+          statusMessage: created.value.error ?? 'Omnigent generation failed.',
+          providerSessionId: created.value.id,
+        });
+      }
       return await this.repository.transitionOmnigentSession({
         actorSubject: input.actorSubject,
         sessionId: local.id,

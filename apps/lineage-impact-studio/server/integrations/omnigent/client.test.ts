@@ -103,6 +103,47 @@ describe('Omnigent authentication', () => {
     });
   });
 
+  it('recovers a failed managed session when prompt dispatch returns unavailable', async () => {
+    const cloneFailure = {
+      id: 'session-1',
+      status: 'failed',
+      last_task_error: {
+        code: 'sandbox_clone_failed',
+        message: 'Unable to clone repository: no Git credential is available',
+      },
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ data: [{ id: 'agent-1', name: 'codex-native-ui' }] }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'session-1', status: 'idle' }, 201))
+      .mockResolvedValueOnce(jsonResponse({ error: 'unavailable' }, 503))
+      .mockResolvedValueOnce(jsonResponse(cloneFailure));
+    const client = new OmnigentClient({ workspaceHost: HOST, fetchImplementation: fetchMock });
+
+    await expect(
+      client.createManagedSession(
+        {
+          repository: 'db-afeng/proactive-zero-ops',
+          headRef: 'feature/lineage-fix',
+          title: 'Lineage fix',
+          prompt: 'Make the narrow source change.',
+          labels: { source: 'lineage-impact-studio' },
+        },
+        { oboToken: OBO_TOKEN }
+      )
+    ).resolves.toMatchObject({
+      authMode: 'obo',
+      value: {
+        id: 'session-1',
+        status: 'failed',
+        error:
+          'Omnigent could not clone this private repository. Configure a Git credential for the Omnigent execution identity and try again.',
+      },
+    });
+    expect(requestUrl(fetchMock.mock.calls[3]?.[0])).toContain('/v1/sessions/session-1?');
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
   it.each([401, 403])('falls back to the app service principal after OBO status %s', async (status) => {
     const fetchMock = vi
       .fn<typeof fetch>()

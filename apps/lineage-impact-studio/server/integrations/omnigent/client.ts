@@ -204,6 +204,14 @@ export class OmnigentClient {
       return { value: snapshot, authMode: dispatched.authMode };
     } catch (error) {
       try {
+        const current = await this.getSession(snapshot.id, auth);
+        if (current.value.status === 'failed' || current.value.sandboxStage === 'failed') {
+          return current;
+        }
+      } catch {
+        // Preserve the original dispatch failure when session recovery is unavailable.
+      }
+      try {
         await this.interruptSession(snapshot.id, auth);
       } catch {
         // Best-effort cleanup; preserve the sanitized dispatch failure.
