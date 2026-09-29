@@ -6,7 +6,11 @@ import { serializeAssessmentViewV3, serializeSourceEvidenceView } from '../domai
 import { parseAssessmentReference } from '../domain/identifiers';
 import { GitHubAppClient } from '../integrations/github';
 import { GitHubIntegrationError } from '../integrations/github/errors';
-import { LineageImpactRepository, type OmnigentSessionView } from '../persistence/repository';
+import {
+  LineageImpactRepository,
+  PersistenceError,
+  type OmnigentSessionView,
+} from '../persistence/repository';
 import { bootstrapLineageImpactStore, type QueryExecutor } from '../persistence/schema';
 import { Aes256GcmCipher, decodeBase64EncryptionKey } from '../security/encryption';
 import { issueOAuthAttempt, OAUTH_COOKIE_OPTIONS } from '../security/oauth';
@@ -183,7 +187,10 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
         });
         clearOAuthCookies(response);
         response.redirect(303, returnTo);
-      } catch {
+      } catch (error) {
+        console.warn('[lineage-impact-studio] GitHub OAuth callback failed', {
+          code: oauthCallbackFailureCode(error),
+        });
         clearOAuthCookies(response);
         response.redirect(303, `${returnTo}${returnTo.includes('#') ? '' : '#fix'}`);
       }
@@ -410,6 +417,14 @@ function recordSafeRequestMetric(
     status,
     latencyMs: Math.max(0, Date.now() - startedAt),
   });
+}
+
+export function oauthCallbackFailureCode(error: unknown): string {
+  if (error instanceof OboAuthorizationError) return 'obo_required';
+  if (error instanceof GitHubIntegrationError) return `github_${error.code}`;
+  if (error instanceof PersistenceError) return `persistence_${error.code}`;
+  if (error instanceof Error && error.message === 'invalid_oauth_callback') return 'invalid_callback';
+  return 'unexpected';
 }
 
 function singleQueryValue(value: unknown): string | null {

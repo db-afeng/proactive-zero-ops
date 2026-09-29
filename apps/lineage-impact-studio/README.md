@@ -50,29 +50,29 @@ interpolated inside `app.yaml`, so do not add `${var.*}` placeholders there.
 
 ## Required secrets and environment
 
-The target declares one read-only key in the `lineage-impact-studio`
+The target declares three read-only keys in the `lineage-impact-studio`
 Databricks secret scope:
 
-| Secret key       | Runtime environment variable    | Requirement                                          |
-| ---------------- | ------------------------------- | ---------------------------------------------------- |
-| `encryption-key` | `LINEAGE_IMPACT_ENCRYPTION_KEY` | Canonical base64 encoding of exactly 32 random bytes |
+| Secret key             | Runtime environment variable    | Requirement                                          |
+| ---------------------- | ------------------------------- | ---------------------------------------------------- |
+| `encryption-key`       | `LINEAGE_IMPACT_ENCRYPTION_KEY` | Canonical base64 encoding of exactly 32 random bytes |
+| `github-client-id`     | `GITHUB_CLIENT_ID`              | Client ID of the repository-restricted GitHub App    |
+| `github-client-secret` | `GITHUB_CLIENT_SECRET`          | Active client secret of that GitHub App              |
 
 The scope and key must exist before deployment. The deployment operator
 must be allowed to grant the app service principal `READ` on the scope. Never
 put the secret value in source control, bundle variables, logs, or command
 arguments.
 
-GitHub OAuth values remain required after GitHub App registration and after
-the canonical Databricks App URL is known:
+The canonical callback is configured directly in `app.yaml` as:
 
-```env
-GITHUB_CLIENT_ID=<github-app-client-id>
-GITHUB_CLIENT_SECRET=<github-app-client-secret>
-GITHUB_REDIRECT_URI=https://<deployed-app-host>/api/github/oauth/callback
+```text
+https://lineage-impact-studio-7474650525906616.aws.databricksapps.com/api/github/oauth/callback
 ```
 
-Add them as literal `value` entries in `app.yaml` only when the real values are
-known. The server must refuse GitHub OAuth when any required value is absent.
+The client ID and client secret are injected through `valueFrom` bindings. Never
+put either value in source control, bundle variables, logs, or command arguments.
+The server must refuse GitHub OAuth when any required value is absent.
 
 For local checks, copy `.env.example` to `.env`, populate local-only secret
 values, and keep `.env` untracked. Use Node.js 22.18 or newer. Do not initialize

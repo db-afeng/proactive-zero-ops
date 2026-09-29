@@ -8,3 +8,9 @@ env:
     valueFrom: postgres
   - name: LINEAGE_IMPACT_ENCRYPTION_KEY
     valueFrom: encryption-key
+  - name: GITHUB_CLIENT_ID
+    valueFrom: github-client-id
+  - name: GITHUB_CLIENT_SECRET
+    valueFrom: github-client-secret
+  - name: GITHUB_REDIRECT_URI
+    value: https://lineage-impact-studio-7474650525906616.aws.databricksapps.com/api/github/oauth/callback
