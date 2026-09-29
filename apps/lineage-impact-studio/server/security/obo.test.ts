@@ -1,7 +1,7 @@
 import type { Request } from 'express';
 import { describe, expect, it } from 'vitest';
 
-import { requireOboRequest } from './obo';
+import { optionalOboAccessToken, requireOboAccessToken, requireOboRequest } from './obo';
 
 function request(headers: Record<string, string>): Request {
   return { headers } as Request;
@@ -36,6 +36,8 @@ describe('requireOboRequest', () => {
         )
       )
     ).not.toContain(accessToken);
+    expect(requireOboAccessToken(request({ 'x-forwarded-access-token': accessToken }))).toBe(accessToken);
+    expect(optionalOboAccessToken(request({}))).toBeNull();
   });
 
   it('rejects an implausibly large forwarded token', () => {

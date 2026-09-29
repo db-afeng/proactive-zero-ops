@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { CommitShaSchema } from '../../domain/identifiers';
 import {
   computePatchDigest,
+  RepositoryPathSchema,
   validatePatchCandidate,
   verifyPatchApproval,
   type ChangedFileDescriptor,
@@ -377,6 +378,54 @@ export class GitHubAppClient {
       headSha: pull.data.head.sha,
       canRead: true,
     };
+  }
+
+  /** Capture the exact blob versions that approval and commit must revalidate. */
+  async getExpectedFileVersions(input: {
+    accessToken: string;
+    expectedHeadSha: string;
+    files: Array<{ path: string; before: string | null }>;
+  }): Promise<ExpectedFileVersion[]> {
+    validateAccessToken(input.accessToken);
+    const expectedHeadSha = parseRequestedCommitSha(input.expectedHeadSha);
+    const files = z
+      .array(z.object({ path: RepositoryPathSchema, before: z.string().max(MAX_FILE_BYTES).nullable() }).strict())
+      .min(1)
+      .max(MAX_CHANGED_FILES)
+      .parse(input.files);
+    if (new Set(files.map((file) => file.path)).size !== files.length) {
+      throw new GitHubIntegrationError('invalid_request');
+    }
+    const commitResponse = await this.apiJson(
+      `/repos/${PINNED_GITHUB_REPOSITORY}/git/commits/${expectedHeadSha}`,
+      input.accessToken,
+      { method: 'GET' }
+    );
+    const commit = GitCommitResponseSchema.safeParse(commitResponse);
+    if (!commit.success || commit.data.tree === undefined) throw new GitHubIntegrationError('invalid_response');
+    const treeResponse = await this.apiJson(
+      `/repos/${PINNED_GITHUB_REPOSITORY}/git/trees/${commit.data.tree.sha}?recursive=1`,
+      input.accessToken,
+      { method: 'GET' }
+    );
+    const tree = GitTreeResponseSchema.safeParse(treeResponse);
+    if (!tree.success || tree.data.truncated) throw new GitHubIntegrationError('invalid_response');
+    const entries = new Map(tree.data.tree.map((entry) => [entry.path, entry]));
+    return await Promise.all(
+      files.map(async (file) => {
+        const entry = entries.get(file.path);
+        if (entry === undefined) {
+          if (file.before !== null) throw new GitHubIntegrationError('unsafe_change');
+          return { path: file.path, expectedBlobSha: null };
+        }
+        if (file.before === null || entry.type !== 'blob' || (entry.mode !== '100644' && entry.mode !== '100755')) {
+          throw new GitHubIntegrationError('unsafe_change');
+        }
+        const baseline = await this.loadTextBlob(input.accessToken, entry.sha);
+        if (baseline.toString('utf8') !== file.before) throw new GitHubIntegrationError('unsafe_change');
+        return { path: file.path, expectedBlobSha: entry.sha };
+      })
+    );
   }
 
   /**

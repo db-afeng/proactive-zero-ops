@@ -1,28 +1,45 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 import type { Application, Request, Response } from 'express';
+import { z } from 'zod';
 
 import { serializeAssessmentViewV3, serializeSourceEvidenceView } from '../domain/assessment-view';
-import { parseAssessmentReference } from '../domain/identifiers';
+import { CommitShaSchema, parseAssessmentReference } from '../domain/identifiers';
 import { GitHubAppClient } from '../integrations/github';
 import { GitHubIntegrationError } from '../integrations/github/errors';
+import { OmnigentClient, OmnigentIntegrationError } from '../integrations/omnigent';
 import { LineageImpactRepository, PersistenceError, type OmnigentSessionView } from '../persistence/repository';
 import { bootstrapLineageImpactStore, type QueryExecutor } from '../persistence/schema';
 import { Aes256GcmCipher, decodeBase64EncryptionKey } from '../security/encryption';
 import { issueOAuthAttempt, OAUTH_COOKIE_OPTIONS } from '../security/oauth';
-import { OboAuthorizationError, requireOboRequest } from '../security/obo';
+import { OboAuthorizationError, optionalOboAccessToken, requireOboRequest } from '../security/obo';
+import { PatchPolicyError, validatePatchCandidate } from '../security/patch-policy';
 import {
   AssessmentService,
   AssessmentUnavailableError,
   DetailedEvidenceUnavailableError,
 } from '../services/assessment-service';
 import type { UserAnalyticsExecutor } from '../services/asset-authorization';
+import { FixService } from '../services/fix-service';
 import { VolumeRestrictedEnvelopeReader, type VolumeReader } from '../services/restricted-envelope-reader';
 
 const OAUTH_BINDING_COOKIE = 'lineage_impact_oauth_binding';
 const OAUTH_RETURN_COOKIE = 'lineage_impact_oauth_return';
-const FIX_UNAVAILABLE_REASON =
-  'Fix generation is disabled because this workspace has no supported Omnigent programming interface.';
+const FIX_UNAVAILABLE_REASON = 'Fix generation could not authenticate to Omnigent from this app runtime.';
+
+const StartFixBodySchema = z
+  .object({
+    guidance: z.string().trim().min(1).max(1200),
+    expectedHeadSha: CommitShaSchema,
+  })
+  .strict();
+
+const PatchActionBodySchema = z
+  .object({
+    patchDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/u),
+    expectedHeadSha: CommitShaSchema,
+  })
+  .strict();
 
 interface StudioAppKit {
   analytics: {
@@ -50,10 +67,18 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
     reader: new VolumeRestrictedEnvelopeReader(appkit.volume),
   });
   const oauth = optionalOAuthRuntime();
+  const omnigent = OmnigentClient.fromEnvironment();
+  const fixService = oauth !== null && omnigent !== null ? new FixService(repository, oauth.client, omnigent) : null;
 
   appkit.server.extend((application) => {
-    application.get('/api/capabilities', (_request, response) => {
-      response.json({ omnigent: { available: false, reason: FIX_UNAVAILABLE_REASON } });
+    application.get('/api/capabilities', async (request, response) => {
+      response.set('Cache-Control', 'private, no-store');
+      if (fixService === null || omnigent === null) {
+        response.json({ omnigent: { available: false, reason: FIX_UNAVAILABLE_REASON } });
+        return;
+      }
+      const capability = await omnigent.probe({ oboToken: optionalOboAccessToken(request) });
+      response.json({ omnigent: capability });
     });
 
     application.get('/api/assessments/:reference', async (request, response) => {
@@ -210,14 +235,74 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
 
     application.post('/api/assessments/:reference/fix-sessions', async (request, response) => {
       try {
-        await reauthorizeAssessment(assessmentService, appkit, request, request.params.reference);
-        sendUnavailable(response, FIX_UNAVAILABLE_REASON);
+        const viewer = requireOboRequest(request);
+        const body = StartFixBodySchema.parse(request.body);
+        const view = await reauthorizeAssessment(assessmentService, appkit, request, request.params.reference);
+        if (view.detailState !== 'available') throw new DetailedEvidenceUnavailableError();
+        if (body.expectedHeadSha !== view.pullRequest.headSha) {
+          response.status(409).json({
+            code: 'STALE_PULL_REQUEST',
+            message: 'The pull request no longer matches this assessment. Re-run the assessment.',
+          });
+          return;
+        }
+        if (fixService === null) {
+          sendUnavailable(response, FIX_UNAVAILABLE_REASON);
+          return;
+        }
+        const credential = await repository.loadGitHubCredential(viewer.subject);
+        if (credential === null) {
+          response.status(409).json({ code: 'GITHUB_DISCONNECTED', message: 'Connect GitHub to generate a fix.' });
+          return;
+        }
+        const sourceEvidence = await assessmentService.getSourceEvidence({
+          reference: request.params.reference,
+          authorizedView: view,
+        });
+        const session = await fixService.start({
+          actorSubject: viewer.subject,
+          assessment: view,
+          sourceEvidence,
+          guidance: body.guidance,
+          credential,
+          omnigentAuth: { oboToken: optionalOboAccessToken(request) },
+        });
+        response.status(202).json(toFixSession(session));
       } catch (error) {
-        sendAssessmentError(response, error);
+        sendFixError(response, error);
       }
     });
 
     application.get('/api/fix-sessions/:id', async (request, response) => {
+      try {
+        const viewer = requireOboRequest(request);
+        let session = await repository.getOmnigentSession(viewer.subject, request.params.id);
+        if (session === null) {
+          response.status(404).json({ code: 'FIX_SESSION_NOT_FOUND', message: 'Fix session was not found.' });
+          return;
+        }
+        const view = await reauthorizeAssessment(assessmentService, appkit, request, session.assessmentReference);
+        if (fixService !== null && !isTerminalFixSession(session)) {
+          const credential = await repository.loadGitHubCredential(viewer.subject);
+          if (credential === null) {
+            response.status(409).json({ code: 'GITHUB_DISCONNECTED', message: 'Reconnect GitHub to continue.' });
+            return;
+          }
+          session = await fixService.synchronize({
+            actorSubject: viewer.subject,
+            session,
+            assessment: view,
+            credential,
+            omnigentAuth: { oboToken: optionalOboAccessToken(request) },
+          });
+        }
+        response.json(toFixSession(session));
+      } catch (error) {
+        sendFixError(response, error);
+      }
+    });
+
+    application.delete('/api/fix-sessions/:id', async (request, response) => {
       try {
         const viewer = requireOboRequest(request);
         const session = await repository.getOmnigentSession(viewer.subject, request.params.id);
@@ -225,39 +310,184 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           response.status(404).json({ code: 'FIX_SESSION_NOT_FOUND', message: 'Fix session was not found.' });
           return;
         }
-        response.json(toFixSession(session));
+        await reauthorizeAssessment(assessmentService, appkit, request, session.assessmentReference);
+        const cancelled =
+          fixService === null
+            ? await repository.requestOmnigentCancellation({
+                actorSubject: viewer.subject,
+                sessionId: request.params.id,
+              })
+            : await fixService.cancel({
+                actorSubject: viewer.subject,
+                session,
+                omnigentAuth: { oboToken: optionalOboAccessToken(request) },
+              });
+        response.json(toFixSession(cancelled));
       } catch (error) {
-        sendRouteError(response, error);
-      }
-    });
-
-    application.delete('/api/fix-sessions/:id', async (request, response) => {
-      try {
-        const viewer = requireOboRequest(request);
-        const session = await repository.requestOmnigentCancellation({
-          actorSubject: viewer.subject,
-          sessionId: request.params.id,
-        });
-        response.json(toFixSession(session));
-      } catch (error) {
-        sendRouteError(response, error);
+        sendFixError(response, error);
       }
     });
 
     application.get('/api/fix-sessions/:id/stream', (_request, response) => {
-      response.status(503).json({ code: 'OMNIGENT_UNAVAILABLE', message: FIX_UNAVAILABLE_REASON });
+      response.status(410).json({
+        code: 'FIX_STREAM_RETIRED',
+        message: 'Use the fix-session status endpoint for progress updates.',
+      });
     });
 
-    application.get('/api/fix-sessions/:id/patch', (_request, response) => {
-      response.status(404).json({ code: 'PATCH_NOT_FOUND', message: 'Validated patch was not found.' });
+    application.get('/api/fix-sessions/:id/patch', async (request, response) => {
+      try {
+        const viewer = requireOboRequest(request);
+        const session = await repository.getOmnigentSession(viewer.subject, request.params.id);
+        if (session === null) {
+          response.status(404).json({ code: 'FIX_SESSION_NOT_FOUND', message: 'Fix session was not found.' });
+          return;
+        }
+        await reauthorizeAssessment(assessmentService, appkit, request, session.assessmentReference);
+        if (fixService === null) {
+          sendUnavailable(response, FIX_UNAVAILABLE_REASON);
+          return;
+        }
+        const patch = await fixService.review(viewer.subject, session.id);
+        if (patch === null) {
+          response.status(404).json({ code: 'PATCH_NOT_FOUND', message: 'Validated patch was not found.' });
+          return;
+        }
+        response.json(patch);
+      } catch (error) {
+        sendFixError(response, error);
+      }
     });
 
-    application.post('/api/fix-sessions/:id/approval', (_request, response) => {
-      sendUnavailable(response, FIX_UNAVAILABLE_REASON);
+    application.post('/api/fix-sessions/:id/approval', async (request, response) => {
+      try {
+        const viewer = requireOboRequest(request);
+        const body = PatchActionBodySchema.parse(request.body);
+        const context = await loadPatchActionContext({
+          repository,
+          assessmentService,
+          appkit,
+          request,
+          sessionId: request.params.id,
+          actorSubject: viewer.subject,
+          body,
+          github: oauth?.client ?? null,
+        });
+        const approval = await repository.approvePatch({
+          actorSubject: viewer.subject,
+          sessionId: context.session.id,
+          expectedHeadSha: body.expectedHeadSha,
+          patchDigest: body.patchDigest,
+        });
+        response.status(approval.created ? 201 : 200).json({ approvedAt: approval.approvedAt });
+      } catch (error) {
+        sendFixError(response, error);
+      }
     });
 
-    application.post('/api/fix-sessions/:id/commit', (_request, response) => {
-      sendUnavailable(response, FIX_UNAVAILABLE_REASON);
+    application.post('/api/fix-sessions/:id/commit', async (request, response) => {
+      let actorSubject: string | null = null;
+      let intentId: string | null = null;
+      let committedSha: string | null = null;
+      try {
+        const viewer = requireOboRequest(request);
+        actorSubject = viewer.subject;
+        const body = PatchActionBodySchema.parse(request.body);
+        const context = await loadPatchActionContext({
+          repository,
+          assessmentService,
+          appkit,
+          request,
+          sessionId: request.params.id,
+          actorSubject: viewer.subject,
+          body,
+          github: oauth?.client ?? null,
+        });
+        if (oauth === null) {
+          sendUnavailable(response, 'GitHub OAuth is not configured for this deployment.');
+          return;
+        }
+        const approval = await repository.getPatchApproval(
+          viewer.subject,
+          context.session.id,
+          body.expectedHeadSha,
+          body.patchDigest
+        );
+        if (approval === null) {
+          response.status(409).json({ code: 'PATCH_NOT_APPROVED', message: 'Approve this exact patch before commit.' });
+          return;
+        }
+        const intent = await repository.reserveCommit({
+          actorSubject: viewer.subject,
+          approvalId: approval.id,
+          idempotencyKey: commitIdempotencyKey(context.session.id, body.patchDigest),
+          assessmentReference: context.session.assessmentReference,
+          repository: context.assessment.pullRequest.repository,
+          pullRequestNumber: context.assessment.pullRequest.number,
+          expectedHeadSha: body.expectedHeadSha,
+          patchDigest: body.patchDigest,
+        });
+        intentId = intent.id;
+        if (!intent.created) {
+          const audit = (await repository.listCommitAudit(viewer.subject, context.session.assessmentReference)).find(
+            (record) => record.intentId === intent.id
+          );
+          if (audit?.outcome === 'succeeded' && audit.commitSha !== null) {
+            response.json({ outcome: 'succeeded', commitSha: audit.commitSha, message: 'Approved patch committed.' });
+            return;
+          }
+          response.status(409).json({
+            code: audit?.outcome === 'failed' ? 'COMMIT_ALREADY_FAILED' : 'COMMIT_IN_PROGRESS',
+            message:
+              audit?.outcome === 'failed'
+                ? 'This approved commit attempt already failed and was recorded.'
+                : 'This approved commit attempt is already being reconciled.',
+          });
+          return;
+        }
+        const created = await oauth.client.createCommitFromValidatedPatch({
+          accessToken: context.credential.accessToken,
+          pullRequestNumber: context.assessment.pullRequest.number,
+          validatedPatch: context.validatedPatch,
+          approvedExpectedHeadSha: body.expectedHeadSha,
+          approvedPatchDigest: body.patchDigest,
+          expectedFiles: context.patch.expectedFiles,
+          message: `Apply lineage impact remediation for PR #${String(context.assessment.pullRequest.number)}`,
+        });
+        committedSha = created.commitSha;
+        await repository.appendCommitAuditEvent({
+          actorSubject: viewer.subject,
+          intentId: intent.id,
+          outcome: 'succeeded',
+          commitSha: created.commitSha,
+        });
+        response.json({ outcome: 'succeeded', commitSha: created.commitSha, message: 'Approved patch committed.' });
+      } catch (error) {
+        if (actorSubject !== null && intentId !== null) {
+          try {
+            if (committedSha !== null) {
+              await repository.appendCommitAuditEvent({
+                actorSubject,
+                intentId,
+                outcome: 'succeeded',
+                commitSha: committedSha,
+              });
+              response.json({ outcome: 'succeeded', commitSha: committedSha, message: 'Approved patch committed.' });
+              return;
+            } else {
+              await repository.appendCommitAuditEvent({
+                actorSubject,
+                intentId,
+                outcome: 'failed',
+                errorCode: safeCommitErrorCode(error),
+              });
+            }
+          } catch {
+            // Preserve the original failure; audit persistence is independently observable.
+          }
+        }
+        sendFixError(response, error);
+      }
     });
 
     application.get('/api/audit/:reference', async (request, response) => {
@@ -296,14 +526,95 @@ async function reauthorizeAssessment(
   });
 }
 
+async function loadPatchActionContext(input: {
+  repository: LineageImpactRepository;
+  assessmentService: AssessmentService;
+  appkit: StudioAppKit;
+  request: Request;
+  sessionId: string;
+  actorSubject: string;
+  body: z.infer<typeof PatchActionBodySchema>;
+  github: GitHubAppClient | null;
+}) {
+  if (input.github === null) throw new GitHubIntegrationError('invalid_configuration');
+  const session = await input.repository.getOmnigentSession(input.actorSubject, input.sessionId);
+  if (session === null) throw new PersistenceError('not_found');
+  if (session.status !== 'complete') throw new PersistenceError('conflict');
+  const assessment = await reauthorizeAssessment(
+    input.assessmentService,
+    input.appkit,
+    input.request,
+    session.assessmentReference
+  );
+  if (
+    input.body.expectedHeadSha !== session.expectedHeadSha ||
+    input.body.expectedHeadSha !== assessment.pullRequest.headSha
+  ) {
+    throw new GitHubIntegrationError('head_changed');
+  }
+  const credential = await input.repository.loadGitHubCredential(input.actorSubject);
+  if (credential === null) throw new GitHubIntegrationError('unauthorized');
+  const pull = await input.github.getValidatedPullRequest({
+    accessToken: credential.accessToken,
+    pullRequestNumber: assessment.pullRequest.number,
+    expectedHeadSha: input.body.expectedHeadSha,
+  });
+  if (pull.repository.toLowerCase() !== assessment.pullRequest.repository.toLowerCase()) {
+    throw new GitHubIntegrationError('repository_mismatch');
+  }
+  const patch = await input.repository.loadDecryptedValidatedPatchForSession(input.actorSubject, session.id);
+  if (
+    patch === null ||
+    patch.expectedHeadSha !== input.body.expectedHeadSha ||
+    patch.patchDigest !== input.body.patchDigest
+  ) {
+    throw new PersistenceError('not_found');
+  }
+  const validatedPatch = validatePatchCandidate({
+    gate: {
+      baseRepository: pull.repository,
+      headRepository: pull.repository,
+      isFork: false,
+      pullRequestState: 'open',
+      canPush: true,
+      force: false,
+      commitStrategy: 'normal',
+      expectedHeadSha: input.body.expectedHeadSha,
+      observedHeadSha: pull.headSha,
+    },
+    files: patch.files,
+    patch: patch.bytes,
+  });
+  if (validatedPatch.digest !== input.body.patchDigest) throw new PatchPolicyError('Patch digest changed');
+  return { session, assessment, credential, patch, validatedPatch };
+}
+
 function toFixSession(session: OmnigentSessionView) {
+  const progress: Record<OmnigentSessionView['status'], number> = {
+    queued: 8,
+    running: 55,
+    validating: 86,
+    complete: 100,
+    failed: 0,
+    cancelled: 0,
+  };
   return {
     id: session.id,
     status: session.status,
+    progress: progress[session.status],
     ...(session.statusMessage === null ? {} : { message: session.statusMessage }),
+    ...(session.status === 'failed' && session.statusMessage !== null ? { error: session.statusMessage } : {}),
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
   };
+}
+
+function isTerminalFixSession(session: OmnigentSessionView): boolean {
+  return session.status === 'complete' || session.status === 'failed' || session.status === 'cancelled';
+}
+
+function commitIdempotencyKey(sessionId: string, patchDigest: string): string {
+  return `fix:${sessionId}:${createHash('sha256').update(patchDigest).digest('hex').slice(0, 24)}`;
 }
 
 function optionalOAuthRuntime(): OAuthRuntime | null {
@@ -361,6 +672,89 @@ function sendSourceEvidenceError(response: Response, error: unknown): void {
     return;
   }
   sendAssessmentError(response, error);
+}
+
+function sendFixError(response: Response, error: unknown): void {
+  if (error instanceof z.ZodError || (error instanceof Error && error.message === 'invalid_guidance')) {
+    response.status(400).json({ code: 'INVALID_FIX_REQUEST', message: 'The fix request is invalid.' });
+    return;
+  }
+  if (error instanceof DetailedEvidenceUnavailableError) {
+    response.status(409).json({ code: 'DETAILED_EVIDENCE_UNAVAILABLE', message: error.message });
+    return;
+  }
+  if (error instanceof GitHubIntegrationError) {
+    if (
+      error.code === 'pull_request_closed' ||
+      error.code === 'base_changed' ||
+      error.code === 'head_changed' ||
+      error.code === 'conflict'
+    ) {
+      response.status(409).json({
+        code: 'STALE_PULL_REQUEST',
+        message: 'The pull request no longer matches this assessment. Re-run the assessment.',
+      });
+      return;
+    }
+    if (error.code === 'invalid_configuration') {
+      sendUnavailable(response, 'GitHub OAuth is not configured for this deployment.');
+      return;
+    }
+    if (
+      error.code === 'unauthorized' ||
+      error.code === 'forbidden' ||
+      error.code === 'not_found' ||
+      error.code === 'read_not_permitted' ||
+      error.code === 'write_not_permitted' ||
+      error.code === 'repository_mismatch' ||
+      error.code === 'fork_not_supported'
+    ) {
+      response.status(403).json({
+        code: 'GITHUB_ACCESS_REQUIRED',
+        message: 'Your connected GitHub identity cannot update this pull request.',
+      });
+      return;
+    }
+    if (error.code === 'invalid_request' || error.code === 'unsafe_change') {
+      response
+        .status(422)
+        .json({ code: 'UNSAFE_PATCH', message: 'The proposed patch did not pass safety validation.' });
+      return;
+    }
+    response.status(error.retryable ? 503 : 502).json({
+      code: 'GITHUB_VALIDATION_FAILED',
+      message: 'GitHub could not verify or commit the approved patch.',
+    });
+    return;
+  }
+  if (error instanceof OmnigentIntegrationError) {
+    response.status(error.retryable ? 503 : 502).json({ code: 'OMNIGENT_UNAVAILABLE', message: error.message });
+    return;
+  }
+  if (error instanceof PatchPolicyError) {
+    response.status(422).json({ code: 'UNSAFE_PATCH', message: 'The proposed patch did not pass safety validation.' });
+    return;
+  }
+  if (error instanceof PersistenceError) {
+    if (error.code === 'not_found') {
+      response
+        .status(404)
+        .json({ code: 'FIX_RESOURCE_NOT_FOUND', message: 'The requested fix resource was not found.' });
+      return;
+    }
+    if (error.code === 'conflict' || error.code === 'idempotency_conflict') {
+      response.status(409).json({ code: 'FIX_STATE_CONFLICT', message: 'The fix is no longer in the required state.' });
+      return;
+    }
+  }
+  sendAssessmentError(response, error);
+}
+
+function safeCommitErrorCode(error: unknown): string {
+  if (error instanceof GitHubIntegrationError) return `github_${error.code}`;
+  if (error instanceof PersistenceError) return `persistence_${error.code}`;
+  if (error instanceof PatchPolicyError) return 'unsafe_patch';
+  return 'unexpected';
 }
 
 function sendRouteError(response: Response, error: unknown): void {

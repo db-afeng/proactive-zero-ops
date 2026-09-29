@@ -146,6 +146,7 @@ export interface GitHubConnection {
 export interface Capabilities {
   omnigent: {
     available: boolean;
+    authMode?: 'obo' | 'service-principal';
     reason?: string;
   };
 }
@@ -186,11 +187,6 @@ export interface ValidatedPatch {
   baseSha: string;
   files: PatchFile[];
   validations: PatchValidation[];
-}
-
-export interface FixStreamEvent {
-  type: 'snapshot' | 'progress' | 'complete' | 'failed';
-  session: FixSession;
 }
 
 export interface CommitOutcome {

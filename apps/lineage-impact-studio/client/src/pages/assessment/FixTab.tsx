@@ -57,7 +57,6 @@ import type {
   Capabilities,
   CommitOutcome,
   FixSession,
-  FixStreamEvent,
   GitHubConnection,
   PatchFile,
   PatchValidation,
@@ -70,7 +69,7 @@ type Loadable<T> =
   | { kind: 'ready'; value: T }
   | { kind: 'error'; message: string };
 
-type StreamState = 'idle' | 'connecting' | 'connected' | 'disconnected';
+type ProgressUpdateState = 'idle' | 'connecting' | 'connected' | 'disconnected';
 
 const GUIDANCE_LIMIT = 1200;
 
@@ -123,21 +122,12 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
     return () => controller.abort();
   }, [active, prerequisiteRetry]);
 
-  useEffect(() => {
-    if (!active || !session?.id || isTerminalSession(session.status)) return;
-    const controller = new AbortController();
-    void getFixSession(session.id, controller.signal)
-      .then((value) => setSession(value))
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
-        handleScopedError(error, setPermissionLost, setStaleHead, setActionError);
-      });
-    return () => controller.abort();
-  }, [active, session?.id, session?.status]);
-
-  const shouldStream = active && session !== undefined && !isTerminalSession(session.status) && !permissionLost;
-  const { streamState, reconnect } = useFixStream(session?.id, shouldStream, (updatedSession) =>
-    setSession(updatedSession)
+  const shouldPoll = active && session !== undefined && !isTerminalSession(session.status) && !permissionLost;
+  const { updateState, retry } = useFixPolling(
+    session?.id,
+    shouldPoll,
+    (updatedSession) => setSession(updatedSession),
+    (error) => handleScopedError(error, setPermissionLost, setStaleHead, setActionError)
   );
 
   useEffect(() => {
@@ -242,8 +232,8 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
             Propose a fix
           </h1>
           <p className="mt-1 max-w-[72ch] text-sm leading-6 text-muted-foreground">
-            Omnigent receives only evidence authorized for your Databricks identity. Generated code is validated before
-            it can be approved or committed.
+            Omnigent receives only evidence authorized for your Databricks identity. Execution uses your identity when
+            available and otherwise the app service principal; generated code is validated before approval or commit.
           </p>
         </div>
         <GitHubConnectionControl
@@ -270,8 +260,8 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
           <ShieldAlert aria-hidden="true" />
           <AlertTitle>Permission changed</AlertTitle>
           <AlertDescription>
-            Your Databricks or GitHub access changed during this review. No service identity result was substituted.
-            Reload after access is restored.
+            Your Databricks or GitHub access changed during this review. The app service principal can run Omnigent, but
+            it cannot replace your assessment or GitHub authorization. Reload after access is restored.
           </AlertDescription>
         </Alert>
       ) : null}
@@ -359,10 +349,10 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
         <div className="space-y-6">
           <SessionProgress
             session={session}
-            streamState={streamState}
+            updateState={updateState}
             actionPending={actionPending}
             onCancel={() => void cancelSession()}
-            onReconnect={reconnect}
+            onRetry={retry}
             onReset={resetSession}
           />
 
@@ -445,17 +435,17 @@ function GitHubConnectionControl({
 
 function SessionProgress({
   session,
-  streamState,
+  updateState,
   actionPending,
   onCancel,
-  onReconnect,
+  onRetry,
   onReset,
 }: {
   session: FixSession;
-  streamState: StreamState;
+  updateState: ProgressUpdateState;
   actionPending: boolean;
   onCancel: () => void;
-  onReconnect: () => void;
+  onRetry: () => void;
   onReset: () => void;
 }) {
   const progress = session.progress ?? defaultProgress(session.status);
@@ -490,15 +480,15 @@ function SessionProgress({
         </div>
       ) : null}
 
-      {streamState === 'disconnected' && active ? (
+      {updateState === 'disconnected' && active ? (
         <Alert className="border-warning/50">
           <Link2Off className="text-warning-foreground" aria-hidden="true" />
-          <AlertTitle>Progress stream disconnected</AlertTitle>
+          <AlertTitle>Progress updates paused</AlertTitle>
           <AlertDescription className="space-y-3">
-            <p>The session is still running. Reconnect to continue receiving live progress.</p>
-            <Button variant="outline" size="sm" onClick={onReconnect}>
+            <p>The session may still be running. Retry to resume status updates.</p>
+            <Button variant="outline" size="sm" onClick={onRetry}>
               <RotateCw aria-hidden="true" />
-              Reconnect stream
+              Retry updates
             </Button>
           </AlertDescription>
         </Alert>
@@ -829,67 +819,57 @@ function ValidationRow({ validation }: { validation: PatchValidation }) {
   );
 }
 
-function useFixStream(sessionId: string | undefined, shouldStream: boolean, onSession: (session: FixSession) => void) {
-  const [streamState, setStreamState] = useState<StreamState>('idle');
-  const [reconnectToken, setReconnectToken] = useState(0);
+function useFixPolling(
+  sessionId: string | undefined,
+  shouldPoll: boolean,
+  onSession: (session: FixSession) => void,
+  onError: (error: unknown) => void
+) {
+  const [updateState, setUpdateState] = useState<ProgressUpdateState>('idle');
+  const [retryToken, setRetryToken] = useState(0);
   const sessionHandler = useRef(onSession);
+  const errorHandler = useRef(onError);
 
   useEffect(() => {
     sessionHandler.current = onSession;
-  }, [onSession]);
+    errorHandler.current = onError;
+  }, [onError, onSession]);
 
   useEffect(() => {
-    if (!sessionId || !shouldStream) {
-      return;
-    }
+    if (!sessionId || !shouldPoll) return;
 
     let disposed = false;
-    let socket: WebSocket | undefined;
-    let reconnectTimer: number | undefined;
-    let attempt = 0;
+    let controller: AbortController | undefined;
+    let pollTimer: number | undefined;
 
-    function connect() {
+    async function poll() {
       if (disposed || !sessionId) return;
-      setStreamState('connecting');
-      const url = new URL(`/api/fix-sessions/${encodeURIComponent(sessionId)}/stream`, window.location.href);
-      url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      socket = new WebSocket(url);
-
-      socket.addEventListener('open', () => {
-        attempt = 0;
-        setStreamState('connected');
-      });
-      socket.addEventListener('message', (event) => {
-        try {
-          const payload = JSON.parse(String(event.data)) as FixStreamEvent;
-          if (payload.session?.id === sessionId) sessionHandler.current(payload.session);
-        } catch {
-          // Ignore malformed stream frames. The authoritative session can still be read over HTTP.
-        }
-      });
-      socket.addEventListener('close', () => {
+      setUpdateState('connecting');
+      controller = new AbortController();
+      try {
+        const updated = await getFixSession(sessionId, controller.signal);
         if (disposed) return;
-        setStreamState('disconnected');
-        const delay = Math.min(1000 * 2 ** attempt, 10_000);
-        attempt += 1;
-        reconnectTimer = window.setTimeout(connect, delay);
-      });
-      socket.addEventListener('error', () => {
-        socket?.close();
-      });
+        setUpdateState('connected');
+        sessionHandler.current(updated);
+        if (!isTerminalSession(updated.status)) pollTimer = window.setTimeout(() => void poll(), 4_000);
+      } catch (error) {
+        if (disposed || controller.signal.aborted) return;
+        setUpdateState('disconnected');
+        errorHandler.current(error);
+      }
     }
 
-    connect();
+    void poll();
     return () => {
       disposed = true;
-      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
-      socket?.close();
+      if (pollTimer !== undefined) window.clearTimeout(pollTimer);
+      controller?.abort();
     };
-  }, [reconnectToken, sessionId, shouldStream]);
+  }, [retryToken, sessionId, shouldPoll]);
 
   return {
-    streamState: !sessionId || !shouldStream ? 'idle' : streamState,
-    reconnect: () => setReconnectToken((value) => value + 1),
+    updateState: !sessionId || !shouldPoll ? 'idle' : updateState,
+    retry: () => setRetryToken((value) => value + 1),
   };
 }
 
@@ -924,7 +904,7 @@ function handleScopedError(
       setPermissionLost(true);
       return;
     }
-    if (error.status === 409) {
+    if (error.status === 409 && (error.code === 'STALE_PULL_REQUEST' || error.code === 'STALE_HEAD')) {
       setStaleHead(true);
       return;
     }

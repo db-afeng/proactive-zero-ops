@@ -24,6 +24,11 @@ Databricks identity, and can review and approve one guarded remediation commit.
   are returned only after the same Unity Catalog OBO authorization plus
   connected-user GitHub repository read access and exact PR base/head SHA
   validation.
+- Omnigent execution tries the forwarded user token first and retries with the
+  Databricks App service principal only after an authorization failure. That
+  fallback can run the isolated agent; it never substitutes for the user's
+  assessment disclosure checks, GitHub read/write authorization, approval, or
+  commit identity.
 - Lakebase stores OAuth state, encrypted GitHub tokens, fix sessions, encrypted
   patches, approvals, and append-only commit audit records. The app service
   principal must create and own the `lineage_impact` schema.
@@ -109,8 +114,10 @@ Deployment is blocked until all of the following are resolved:
    encryption key.
 3. Register and restrict the GitHub App, then configure its real client ID,
    client secret, and canonical OAuth redirect URI.
-4. Confirm Omnigent has a supported workspace API. Fix generation remains
-   disabled and fail-closed if no programmable API is available.
+4. Validate managed Omnigent session creation, polling, cancellation, and diff
+   retrieval from the deployed app runtime. The integration tries user OBO
+   first and falls back to the app service principal only when OBO is not
+   authorized.
 5. Make every validation gate below green.
 6. With a non-privileged test principal that has warehouse `CAN_USE` but no
    `SELECT` on a dedicated test table, execute the parameterized zero-row probe

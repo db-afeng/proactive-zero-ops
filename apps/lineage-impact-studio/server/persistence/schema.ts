@@ -69,6 +69,8 @@ export const LINEAGE_IMPACT_BOOTSTRAP_SQL = Object.freeze([
     CONSTRAINT omnigent_expected_head_sha CHECK (expected_head_sha ~ '^[0-9a-f]{40,64}$'),
     CONSTRAINT omnigent_evidence_digest CHECK (authorized_evidence_digest ~ '^sha256:[0-9a-f]{64}$')
   )`,
+  `ALTER TABLE lineage_impact.omnigent_sessions
+    ADD COLUMN IF NOT EXISTS provider_session_id TEXT`,
   `CREATE INDEX IF NOT EXISTS omnigent_sessions_actor_assessment_idx
     ON lineage_impact.omnigent_sessions (actor_subject, assessment_reference, created_at DESC)`,
   `CREATE TABLE IF NOT EXISTS lineage_impact.validated_patches (

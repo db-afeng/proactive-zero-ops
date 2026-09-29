@@ -53,6 +53,7 @@ describe('Lakebase persistence bootstrap', () => {
       expect(sql).toContain(`lineage_impact.${table}`);
     }
     expect(sql).toContain("WHERE outcome = 'succeeded'");
+    expect(sql).toContain('ADD COLUMN IF NOT EXISTS provider_session_id TEXT');
   });
 });
 

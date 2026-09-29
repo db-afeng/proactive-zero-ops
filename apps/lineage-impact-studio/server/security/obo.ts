@@ -19,12 +19,24 @@ const MAX_ACCESS_TOKEN_LENGTH = 16 * 1024;
 /** Reject before AppKit's development-mode SP fallback can be reached. */
 export function requireOboRequest(request: Request): OboViewer {
   const subject = singleHeader(request, 'x-forwarded-user');
-  const accessToken = accessTokenHeader(request);
+  const accessToken = oboAccessToken(request);
   const email = optionalSingleHeader(request, 'x-forwarded-email');
   if (subject === null || accessToken === null || accessToken.length < 20) {
     throw new OboAuthorizationError();
   }
   return { subject, displayName: email ?? subject };
+}
+
+/** Server-only token access. Never include this value in response objects or logs. */
+export function requireOboAccessToken(request: Request): string {
+  const accessToken = oboAccessToken(request);
+  if (accessToken === null) throw new OboAuthorizationError();
+  return accessToken;
+}
+
+/** Returns the forwarded token when present so callers may fall back to app auth. */
+export function optionalOboAccessToken(request: Request): string | null {
+  return oboAccessToken(request);
 }
 
 function optionalSingleHeader(request: Request, name: string): string | null {
@@ -40,7 +52,7 @@ function optionalSingleHeader(request: Request, name: string): string | null {
   return value;
 }
 
-function accessTokenHeader(request: Request): string | null {
+function oboAccessToken(request: Request): string | null {
   const value = request.headers['x-forwarded-access-token'];
   if (typeof value !== 'string' || value.length < 20 || value.length > MAX_ACCESS_TOKEN_LENGTH || hasControl(value)) {
     return null;

@@ -83,6 +83,7 @@ export type OmnigentSessionStatus = z.infer<typeof OmnigentSessionStatusSchema>;
 
 export interface OmnigentSessionView {
   id: string;
+  providerSessionId: string | null;
   assessmentReference: string;
   expectedHeadSha: string;
   authorizedEvidenceDigest: string;
@@ -186,6 +187,7 @@ const GitHubCredentialRowSchema = z.object({ encrypted_credentials: z.unknown() 
 
 const OmnigentSessionRowSchema = z.object({
   id: UuidSchema,
+  provider_session_id: z.string().max(512).nullable(),
   assessment_reference: AssessmentReferenceSchema,
   expected_head_sha: CommitShaSchema,
   authorized_evidence_digest: PatchDigestSchema,
@@ -393,7 +395,7 @@ export class LineageImpactRepository {
         id, actor_subject, assessment_reference, expected_head_sha,
         authorized_evidence_digest, guidance, status, created_at, updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $7)
-      RETURNING id, assessment_reference, expected_head_sha, authorized_evidence_digest,
+      RETURNING id, provider_session_id, assessment_reference, expected_head_sha, authorized_evidence_digest,
         guidance, status, status_message, cancel_requested_at, created_at, updated_at, finished_at`,
       [id, actor, reference, expectedHeadSha, evidenceDigest, guidance, now]
     );
@@ -404,7 +406,7 @@ export class LineageImpactRepository {
     const actor = ActorSchema.parse(actorSubject);
     const id = UuidSchema.parse(sessionId);
     const result = await this.executor.query(
-      `SELECT id, assessment_reference, expected_head_sha, authorized_evidence_digest,
+      `SELECT id, provider_session_id, assessment_reference, expected_head_sha, authorized_evidence_digest,
         guidance, status, status_message, cancel_requested_at, created_at, updated_at, finished_at
        FROM lineage_impact.omnigent_sessions
        WHERE actor_subject = $1 AND id = $2`,
@@ -439,7 +441,7 @@ export class LineageImpactRepository {
            updated_at = $7,
            finished_at = CASE WHEN $8 THEN $7 ELSE finished_at END
        WHERE actor_subject = $1 AND id = $2 AND status = ANY($3::text[])
-       RETURNING id, assessment_reference, expected_head_sha, authorized_evidence_digest,
+       RETURNING id, provider_session_id, assessment_reference, expected_head_sha, authorized_evidence_digest,
          guidance, status, status_message, cancel_requested_at, created_at, updated_at, finished_at`,
       [actor, id, expectedStatuses, status, statusMessage, providerSessionId, now, terminal]
     );
@@ -458,8 +460,8 @@ export class LineageImpactRepository {
     const result = await this.executor.query(
       `UPDATE lineage_impact.omnigent_sessions
        SET status = 'cancelled', cancel_requested_at = $3, updated_at = $3, finished_at = $3
-       WHERE actor_subject = $1 AND id = $2 AND status IN ('queued', 'running')
-       RETURNING id, assessment_reference, expected_head_sha, authorized_evidence_digest,
+       WHERE actor_subject = $1 AND id = $2 AND status IN ('queued', 'running', 'validating')
+       RETURNING id, provider_session_id, assessment_reference, expected_head_sha, authorized_evidence_digest,
          guidance, status, status_message, cancel_requested_at, created_at, updated_at, finished_at`,
       [actor, id, now]
     );
@@ -833,6 +835,7 @@ function mapConnectionStatus(row: z.infer<typeof GitHubConnectionRowSchema>): Gi
 function mapOmnigentSession(row: z.infer<typeof OmnigentSessionRowSchema>): OmnigentSessionView {
   return {
     id: row.id,
+    providerSessionId: row.provider_session_id,
     assessmentReference: row.assessment_reference,
     expectedHeadSha: row.expected_head_sha,
     authorizedEvidenceDigest: row.authorized_evidence_digest,

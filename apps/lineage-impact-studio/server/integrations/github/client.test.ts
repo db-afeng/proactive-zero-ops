@@ -164,6 +164,60 @@ describe('GitHub App OAuth', () => {
 });
 
 describe('pull-request commit gate', () => {
+  it('binds changed paths to exact blobs at the assessed head', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ sha: HEAD_SHA, tree: { sha: BASE_TREE_SHA } }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          sha: BASE_TREE_SHA,
+          truncated: false,
+          tree: [{ path: PATH, mode: '100644', type: 'blob', sha: OLD_BLOB_SHA }],
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ content: Buffer.from('old\n').toString('base64'), encoding: 'base64', size: 4 })
+      );
+
+    await expect(
+      client(fetchMock).getExpectedFileVersions({
+        accessToken: TOKEN,
+        expectedHeadSha: HEAD_SHA,
+        files: [
+          { path: PATH, before: 'old\n' },
+          { path: 'src/new.py', before: null },
+        ],
+      })
+    ).resolves.toEqual([
+      { path: PATH, expectedBlobSha: OLD_BLOB_SHA },
+      { path: 'src/new.py', expectedBlobSha: null },
+    ]);
+  });
+
+  it('rejects an Omnigent baseline that does not match the assessed GitHub blob', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ sha: HEAD_SHA, tree: { sha: BASE_TREE_SHA } }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          sha: BASE_TREE_SHA,
+          truncated: false,
+          tree: [{ path: PATH, mode: '100644', type: 'blob', sha: OLD_BLOB_SHA }],
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ content: Buffer.from('actual\n').toString('base64'), encoding: 'base64', size: 7 })
+      );
+
+    await expect(
+      client(fetchMock).getExpectedFileVersions({
+        accessToken: TOKEN,
+        expectedHeadSha: HEAD_SHA,
+        files: [{ path: PATH, before: 'agent-claimed\n' }],
+      })
+    ).rejects.toMatchObject({ code: 'unsafe_change' });
+  });
+
   it('rejects a fork even when the PR number and expected SHA look valid', async () => {
     const forkPull = pullResponse({
       head: {
