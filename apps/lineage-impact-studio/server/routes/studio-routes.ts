@@ -6,11 +6,7 @@ import { serializeAssessmentViewV3, serializeSourceEvidenceView } from '../domai
 import { parseAssessmentReference } from '../domain/identifiers';
 import { GitHubAppClient } from '../integrations/github';
 import { GitHubIntegrationError } from '../integrations/github/errors';
-import {
-  LineageImpactRepository,
-  PersistenceError,
-  type OmnigentSessionView,
-} from '../persistence/repository';
+import { LineageImpactRepository, PersistenceError, type OmnigentSessionView } from '../persistence/repository';
 import { bootstrapLineageImpactStore, type QueryExecutor } from '../persistence/schema';
 import { Aes256GcmCipher, decodeBase64EncryptionKey } from '../security/encryption';
 import { issueOAuthAttempt, OAUTH_COOKIE_OPTIONS } from '../security/oauth';
