@@ -1,5 +1,26 @@
 export type AssessmentStatus = 'pass' | 'warn' | 'block' | 'error';
 export type AssessmentFreshness = 'current' | 'stale' | 'unknown';
+export type AssessmentSeverity = 'none' | 'low' | 'medium' | 'high' | 'critical';
+export type TypeFamily = 'numeric' | 'text' | 'boolean' | 'date' | 'timestamp' | 'complex' | 'unknown';
+export type OperationKind =
+  | 'arithmetic'
+  | 'aggregate'
+  | 'comparison'
+  | 'filter'
+  | 'join'
+  | 'cast'
+  | 'constraint'
+  | 'pass_through'
+  | 'unknown';
+export type ImpactReasonCode =
+  | 'incompatible_type'
+  | 'missing_column'
+  | 'renamed_column'
+  | 'incompatible_operation'
+  | 'semantic_change'
+  | 'upstream_failure'
+  | 'manual_review';
+export type RemediationKind = 'restore_contract' | 'add_compatibility_column' | 'update_consumers' | 'reassess';
 
 export interface AuthorizedLineageSegment {
   kind: 'asset';
@@ -13,15 +34,62 @@ export interface RestrictedLineageSegment {
 
 export type LineageSegment = AuthorizedLineageSegment | RestrictedLineageSegment;
 
-export interface AssessmentViewV1 {
-  schemaVersion: 1;
+export interface AssessmentChange {
+  id: string;
+  asset: string;
+  column: string;
+  changeKind: 'added' | 'deleted' | 'renamed' | 'modified';
+  beforeType: TypeFamily;
+  afterType: TypeFamily;
+}
+
+export interface AssessmentImpact {
+  id: string;
+  changeId: string;
+  relation: 'direct' | 'transitive';
+  targetAsset: string;
+  targetColumn: string | null;
+  operation: OperationKind;
+  reason: ImpactReasonCode;
+  evidenceLevel: 'definition' | 'lineage';
+  path: LineageSegment[];
+  remediation: RemediationKind;
+}
+
+export interface AssessmentGraphNode {
+  id: string;
+  role: 'changed' | 'direct_break' | 'transitive_impact' | 'context' | 'restricted';
+  label: string;
+  asset?: string;
+  assetType?: AuthorizedLineageSegment['assetType'];
+  column?: string;
+  changeId?: string;
+  impactId?: string;
+}
+
+export interface AssessmentGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  origin: 'observed_lineage' | 'proposed_code' | 'mixed' | 'unknown';
+  evidenceLevel: 'column' | 'table' | 'definition';
+  lastObservedAt: string | null;
+}
+
+export interface AssessmentViewV2 {
+  schemaVersion: 2;
   reference: string;
+  detailState: 'available' | 'legacy';
   status: AssessmentStatus;
+  severity: AssessmentSeverity;
   message: string;
+  headline: string;
+  recommendedAction: string;
   source: {
     provider: 'github';
     createdAt: string;
     freshness: AssessmentFreshness;
+    evidenceOrigin: 'observed_lineage' | 'proposed_code' | 'mixed' | 'unavailable';
   };
   pullRequest: {
     repository: string;
@@ -33,13 +101,37 @@ export interface AssessmentViewV1 {
     subject: string;
     displayName: string;
   };
-  lineagePaths: Array<{
-    segments: LineageSegment[];
-  }>;
+  confidence: {
+    interpretation: number | null;
+    discovery: 'complete' | 'incomplete' | 'unknown';
+  };
+  changes: AssessmentChange[];
+  impacts: AssessmentImpact[];
+  graph: {
+    nodes: AssessmentGraphNode[];
+    edges: AssessmentGraphEdge[];
+  };
   disclosure: {
     state: 'full' | 'partial' | 'none';
     notice: string;
   };
+}
+
+export interface SourceEvidenceView {
+  schemaVersion: 1;
+  assessmentReference: string;
+  pullRequestFilesUrl: string;
+  changes: Array<{
+    id: string;
+    filePath: string | null;
+    diffUrl: string | null;
+    beforeExpression: string | null;
+    afterExpression: string | null;
+  }>;
+  impacts: Array<{
+    id: string;
+    targetExpression: string | null;
+  }>;
 }
 
 export interface GitHubConnection {

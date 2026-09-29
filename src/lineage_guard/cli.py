@@ -19,6 +19,7 @@ from lineage_guard.disclosure import (
     render_public_markdown,
     serialize_public_artifact,
 )
+from lineage_guard.display_evidence import build_display_evidence
 from lineage_guard.evaluate import evaluate_assessment
 from lineage_guard.gitdiff import ChangeSet, collect_changes
 from lineage_guard.lineage import LineageGraph, LineageRepository, StatementExecutor
@@ -212,6 +213,7 @@ def _restricted_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "result": result.model_dump(mode="json"),
+        "display_evidence": build_display_evidence(result, changes).model_dump(mode="json"),
         "identity_semantics": {
             "assessment_principal": "service_principal",
             "on_behalf_of_user": False,

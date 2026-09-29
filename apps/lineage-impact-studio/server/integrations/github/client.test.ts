@@ -51,8 +51,8 @@ function pullResponse(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function repositoryResponse(canPush = true) {
-  return { full_name: PINNED_GITHUB_REPOSITORY, permissions: { push: canPush } };
+function repositoryResponse(canPush = true, canPull = true) {
+  return { full_name: PINNED_GITHUB_REPOSITORY, permissions: { push: canPush, pull: canPull } };
 }
 
 function validatedPatch() {
@@ -257,6 +257,54 @@ describe('pull-request commit gate', () => {
     });
     const refUpdate = calls.find((call) => call.url.includes('/git/refs/heads/') && call.init.method === 'PATCH');
     expect(JSON.parse(bodyText(refUpdate?.init.body))).toEqual({ sha: COMMIT_SHA, force: false });
+  });
+});
+
+describe('source-evidence read gate', () => {
+  it('authorizes exact evidence only when the repository and both assessed SHAs still match', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(pullResponse()))
+      .mockResolvedValueOnce(jsonResponse(repositoryResponse(false, true)));
+    await expect(
+      client(fetchMock).getValidatedSourcePullRequest({
+        accessToken: TOKEN,
+        repository: PINNED_GITHUB_REPOSITORY,
+        pullRequestNumber: 4,
+        expectedBaseSha: BASE_SHA,
+        expectedHeadSha: HEAD_SHA,
+      })
+    ).resolves.toMatchObject({ canRead: true, baseSha: BASE_SHA, headSha: HEAD_SHA });
+  });
+
+  it.each([
+    ['missing read access', pullResponse(), repositoryResponse(false, false), 'read_not_permitted'],
+    [
+      'stale base SHA',
+      pullResponse({ base: { ...pullResponse().base, sha: '8'.repeat(40) } }),
+      repositoryResponse(false, true),
+      'base_changed',
+    ],
+    [
+      'stale head SHA',
+      pullResponse({ head: { ...pullResponse().head, sha: '9'.repeat(40) } }),
+      repositoryResponse(false, true),
+      'head_changed',
+    ],
+  ])('rejects %s', async (_label, pull, repository, code) => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(pull))
+      .mockResolvedValueOnce(jsonResponse(repository));
+    await expect(
+      client(fetchMock).getValidatedSourcePullRequest({
+        accessToken: TOKEN,
+        repository: PINNED_GITHUB_REPOSITORY,
+        pullRequestNumber: 4,
+        expectedBaseSha: BASE_SHA,
+        expectedHeadSha: HEAD_SHA,
+      })
+    ).rejects.toMatchObject({ code });
   });
 });
 

@@ -23,7 +23,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router';
 
 import { ApiRequestError, getAssessment } from '@/lib/api';
-import type { AssessmentStatus, AssessmentViewV1 } from '@/lib/contracts';
+import type { AssessmentStatus, AssessmentViewV2 } from '@/lib/contracts';
 
 import { AssessmentTab } from './AssessmentTab';
 import { AuditTab } from './AuditTab';
@@ -31,8 +31,8 @@ import { FixTab } from './FixTab';
 
 type WorkbenchTab = 'assessment' | 'fix' | 'audit';
 type AssessmentLoadState =
-  | { kind: 'loading' }
-  | { kind: 'ready'; assessment: AssessmentViewV1 }
+  | { kind: 'loading'; phase: 'initial' | 'slow' }
+  | { kind: 'ready'; assessment: AssessmentViewV2 }
   | { kind: 'unavailable' }
   | { kind: 'error'; message: string };
 
@@ -69,17 +69,22 @@ const STATUS_PRESENTATION: Record<
 export function AssessmentPage() {
   const { reference = '' } = useParams();
   const [retryToken, setRetryToken] = useState(0);
-  const [state, setState] = useState<AssessmentLoadState>({ kind: 'loading' });
+  const [state, setState] = useState<AssessmentLoadState>({ kind: 'loading', phase: 'initial' });
 
   useEffect(() => {
     const controller = new AbortController();
+    const slowTimer = window.setTimeout(() => {
+      setState((current) => (current.kind === 'loading' ? { kind: 'loading', phase: 'slow' } : current));
+    }, 10_000);
 
     void getAssessment(reference, controller.signal)
       .then((assessment) => {
+        window.clearTimeout(slowTimer);
         setState({ kind: 'ready', assessment });
         document.title = `${assessment.pullRequest.repository} #${assessment.pullRequest.number} · Lineage Impact Studio`;
       })
       .catch((error: unknown) => {
+        window.clearTimeout(slowTimer);
         if (controller.signal.aborted) return;
         if (
           error instanceof ApiRequestError &&
@@ -98,20 +103,23 @@ export function AssessmentPage() {
         });
       });
 
-    return () => controller.abort();
+    return () => {
+      window.clearTimeout(slowTimer);
+      controller.abort();
+    };
   }, [reference, retryToken]);
 
   if (state.kind === 'ready' && state.assessment.reference !== reference) {
-    return <AssessmentLoading />;
+    return <AssessmentLoading phase="initial" />;
   }
-  if (state.kind === 'loading') return <AssessmentLoading />;
+  if (state.kind === 'loading') return <AssessmentLoading phase={state.phase} />;
   if (state.kind === 'unavailable') return <AssessmentUnavailable />;
   if (state.kind === 'error') {
     return (
       <AssessmentFailure
         message={state.message}
         onRetry={() => {
-          setState({ kind: 'loading' });
+          setState({ kind: 'loading', phase: 'initial' });
           setRetryToken((value) => value + 1);
         }}
       />
@@ -121,7 +129,7 @@ export function AssessmentPage() {
   return <AssessmentWorkbench key={state.assessment.reference} assessment={state.assessment} />;
 }
 
-function AssessmentWorkbench({ assessment }: { assessment: AssessmentViewV1 }) {
+function AssessmentWorkbench({ assessment }: { assessment: AssessmentViewV2 }) {
   const [activeTab, setActiveTab] = useState<WorkbenchTab>(() => tabFromHash());
   const status = STATUS_PRESENTATION[assessment.status];
   const StatusIcon = status.icon;
@@ -199,7 +207,7 @@ function AssessmentWorkbench({ assessment }: { assessment: AssessmentViewV1 }) {
   );
 }
 
-function AssessmentLoading() {
+function AssessmentLoading({ phase }: { phase: 'initial' | 'slow' }) {
   return (
     <div className="min-h-screen bg-background text-foreground" aria-busy="true">
       <header className="border-b border-border px-4 py-4 md:px-6">
@@ -221,7 +229,17 @@ function AssessmentLoading() {
           <Skeleton className="h-16 w-full" />
         </div>
       </main>
-      <span className="sr-only">Loading assessment</span>
+      <span className="sr-only" role="status">
+        {phase === 'slow' ? 'Checking workspace permissions and assessment evidence' : 'Loading assessment'}
+      </span>
+      {phase === 'slow' ? (
+        <p
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 border border-border bg-background px-4 py-2 text-sm text-muted-foreground shadow-sm"
+          role="status"
+        >
+          Checking workspace permissions and assessment evidence…
+        </p>
+      ) : null}
     </div>
   );
 }

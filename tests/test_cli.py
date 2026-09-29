@@ -85,7 +85,8 @@ def test_no_semantic_or_bundle_change_passes_without_databricks(
     assert exit_code == 0
     assert public_result(tmp_path)["outcome"] == "pass"
     restricted = restricted_result(tmp_path)
-    assert restricted["schema_version"] == 2
+    assert restricted["schema_version"] == 3
+    assert restricted["evidence"]["display_evidence"]["schema_version"] == 1
     assert restricted["source"] == {
         "provider": "github",
         "repository": "db-afeng/proactive-zero-ops",

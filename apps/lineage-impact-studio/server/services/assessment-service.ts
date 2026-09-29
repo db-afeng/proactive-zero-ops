@@ -1,6 +1,13 @@
+import { createHash } from 'node:crypto';
+
 import type { Request } from 'express';
 
-import { createAssessmentViewV1, redactLineagePath, type AssessmentViewV1 } from '../domain/assessment-view';
+import {
+  createAssessmentViewV2,
+  SourceEvidenceViewSchema,
+  type AssessmentViewV2,
+  type SourceEvidenceView,
+} from '../domain/assessment-view';
 import { projectRestrictedEvidence } from '../domain/evidence-projection';
 import { parseAssessmentReference } from '../domain/identifiers';
 import { parseRestrictedAssessmentEnvelope } from '../domain/restricted-envelope';
@@ -23,6 +30,14 @@ export class AssessmentPermissionCheckError extends Error {
 
   constructor() {
     super('Your Databricks permissions could not be verified.');
+  }
+}
+
+export class DetailedEvidenceUnavailableError extends Error {
+  override readonly name = 'DetailedEvidenceUnavailableError';
+
+  constructor() {
+    super('Re-run this assessment before requesting source evidence.');
   }
 }
 
@@ -51,20 +66,10 @@ export class AssessmentService {
     request: Request;
     reference: unknown;
     userAnalytics: UserAnalyticsExecutor;
-  }): Promise<AssessmentViewV1> {
+  }): Promise<AssessmentViewV2> {
     const viewer = requireOboRequest(options.request);
-    let reference: string;
-    let envelopeBytes: Uint8Array;
+    const { reference, envelope } = await this.#load(options.reference);
     try {
-      reference = parseAssessmentReference(options.reference);
-      envelopeBytes = await this.#reader.read(reference);
-    } catch (error) {
-      console.warn('[lineage-impact-studio] Assessment unavailable at envelope load', safeErrorType(error));
-      throw new AssessmentUnavailableError();
-    }
-
-    try {
-      const envelope = parseRestrictedAssessmentEnvelope(envelopeBytes, reference);
       const freshness = assessmentFreshness(envelope.created_at, this.#now());
       if (freshness === 'expired') throw new AssessmentUnavailableError();
       const projection = projectRestrictedEvidence(envelope);
@@ -86,24 +91,9 @@ export class AssessmentService {
         throw new AssessmentUnavailableError();
       }
 
-      const lineagePaths = projection.lineagePaths.map((path) => ({
-        segments: redactLineagePath(
-          path.map((asset) => {
-            const decision = access.get(asset.reference);
-            return {
-              authorized: decision?.authorized === true,
-              asset: {
-                reference: asset.reference,
-                assetType: decision?.assetType ?? asset.assetType,
-              },
-            };
-          })
-        ),
-      }));
-
-      return createAssessmentViewV1({
+      return createAssessmentViewV2({
         reference,
-        status: projection.status,
+        projection,
         source: {
           provider: 'github',
           createdAt: envelope.created_at,
@@ -116,35 +106,81 @@ export class AssessmentService {
           headSha: envelope.source.head_sha,
         },
         viewer,
-        lineagePaths,
+        access,
       });
     } catch (error) {
-      if (error instanceof AssessmentUnavailableError || error instanceof AssessmentPermissionCheckError) {
-        throw error;
-      }
+      if (error instanceof AssessmentUnavailableError || error instanceof AssessmentPermissionCheckError) throw error;
       console.warn('[lineage-impact-studio] Assessment unavailable after envelope load', safeErrorType(error));
+      throw new AssessmentUnavailableError();
+    }
+  }
+
+  async getSourceEvidence(options: {
+    reference: unknown;
+    authorizedView: AssessmentViewV2;
+  }): Promise<SourceEvidenceView> {
+    const { reference, envelope } = await this.#load(options.reference);
+    if (envelope.schema_version !== 3 || options.authorizedView.detailState !== 'available') {
+      throw new DetailedEvidenceUnavailableError();
+    }
+    if (options.authorizedView.reference !== reference) throw new AssessmentUnavailableError();
+    const changeIds = new Set(options.authorizedView.changes.map((change) => change.id));
+    const impactIds = new Set(options.authorizedView.impacts.map((impact) => impact.id));
+    const pullRequestFilesUrl = `https://github.com/${envelope.source.repository}/pull/${String(envelope.source.pull_request_number)}/files`;
+    return SourceEvidenceViewSchema.parse({
+      schemaVersion: 1,
+      assessmentReference: reference,
+      pullRequestFilesUrl,
+      changes: envelope.evidence.display_evidence.changes
+        .filter((change) => changeIds.has(change.id))
+        .map((change) => ({
+          id: change.id,
+          filePath: change.file_path,
+          diffUrl:
+            change.file_path === null
+              ? null
+              : `${pullRequestFilesUrl}#diff-${createHash('sha256').update(change.file_path).digest('hex')}`,
+          beforeExpression: change.before_expression,
+          afterExpression: change.after_expression,
+        })),
+      impacts: envelope.evidence.display_evidence.impacts
+        .filter((impact) => impactIds.has(impact.id))
+        .map((impact) => ({ id: impact.id, targetExpression: impact.target_expression })),
+    });
+  }
+
+  async #load(referenceValue: unknown) {
+    let reference: string;
+    let envelopeBytes: Uint8Array;
+    try {
+      reference = parseAssessmentReference(referenceValue);
+      envelopeBytes = await this.#reader.read(reference);
+      return { reference, envelope: parseRestrictedAssessmentEnvelope(envelopeBytes, reference) };
+    } catch (error) {
+      console.warn('[lineage-impact-studio] Assessment unavailable at envelope load', safeErrorType(error));
       throw new AssessmentUnavailableError();
     }
   }
 }
 
-export function createAuthorizedFixContext(view: AssessmentViewV1) {
+export function createAuthorizedFixContext(view: AssessmentViewV2) {
+  const authorizedLineage = view.impacts.map((impact) =>
+    impact.path
+      .filter((segment) => segment.kind === 'asset')
+      .map((segment) => ({ reference: segment.reference, assetType: segment.assetType }))
+  );
   return {
     schemaVersion: 1 as const,
     assessmentReference: view.reference,
     status: view.status,
     message: view.message,
     pullRequest: view.pullRequest,
-    authorizedLineage: view.lineagePaths.map((path) =>
-      path.segments
-        .filter((segment) => segment.kind === 'asset')
-        .map((segment) => ({ reference: segment.reference, assetType: segment.assetType }))
-    ),
+    authorizedLineage,
     disclosureState: view.disclosure.state,
   };
 }
 
-function assessmentFreshness(createdAtValue: string, now: Date): AssessmentViewV1['source']['freshness'] | 'expired' {
+function assessmentFreshness(createdAtValue: string, now: Date): AssessmentViewV2['source']['freshness'] | 'expired' {
   const createdAt = Date.parse(createdAtValue);
   const age = now.getTime() - createdAt;
   if (!Number.isFinite(age) || age < 0) return 'unknown';

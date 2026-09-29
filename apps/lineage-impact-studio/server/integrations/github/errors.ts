@@ -10,7 +10,9 @@ export type GitHubIntegrationErrorCode =
   | 'repository_mismatch'
   | 'fork_not_supported'
   | 'pull_request_closed'
+  | 'base_changed'
   | 'head_changed'
+  | 'read_not_permitted'
   | 'write_not_permitted'
   | 'unsafe_change'
   | 'conflict'
@@ -52,8 +54,12 @@ function errorMessage(code: GitHubIntegrationErrorCode): string {
       return 'Fork pull requests are not supported';
     case 'pull_request_closed':
       return 'Pull request is no longer open';
+    case 'base_changed':
+      return 'Pull request base changed';
     case 'head_changed':
       return 'Pull request head changed';
+    case 'read_not_permitted':
+      return 'GitHub identity cannot read this repository';
     case 'write_not_permitted':
       return 'GitHub identity cannot write to this pull request';
     case 'unsafe_change':
