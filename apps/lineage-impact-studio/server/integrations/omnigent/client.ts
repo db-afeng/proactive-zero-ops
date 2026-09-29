@@ -130,7 +130,7 @@ export class OmnigentClient {
   }) {
     const host = normalizedWorkspaceHost(options.workspaceHost);
     this.#baseUrl = `${host}/api/2.0/omnigent`;
-    this.#agentName = validateAgentName(options.agentName ?? 'polly');
+    this.#agentName = validateAgentName(options.agentName ?? 'codex-native-ui');
     this.#fetch = options.fetchImplementation ?? fetch;
     this.#servicePrincipal = options.servicePrincipal ?? null;
   }
@@ -381,8 +381,21 @@ function parseSession(value: unknown): OmnigentSessionSnapshot {
     runnerOnline: parsed.data.runner_online ?? null,
     hostOnline: parsed.data.host_online ?? null,
     sandboxStage: sandbox?.stage ?? sandbox?.status ?? null,
-    error: error?.message ?? error?.code ?? sandbox?.error ?? null,
+    error: sanitizedSessionError(error?.message ?? error?.code ?? sandbox?.error),
   };
+}
+
+function sanitizedSessionError(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const normalized = value.toLowerCase();
+  const mentionsGit = ['clone', 'git', 'repository'].some((term) => normalized.includes(term));
+  const mentionsCredentials = ['credential', 'authentication', 'linked account'].some((term) =>
+    normalized.includes(term)
+  );
+  if (mentionsGit && mentionsCredentials) {
+    return 'Omnigent could not clone this private repository. Configure a Git credential for the Omnigent execution identity and try again.';
+  }
+  return 'Omnigent could not complete the managed fix session.';
 }
 
 async function parseJson(response: Response): Promise<unknown> {

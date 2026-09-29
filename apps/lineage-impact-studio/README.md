@@ -28,7 +28,13 @@ Databricks identity, and can review and approve one guarded remediation commit.
   Databricks App service principal only after an authorization failure. That
   fallback can run the isolated agent; it never substitutes for the user's
   assessment disclosure checks, GitHub read/write authorization, approval, or
-  commit identity.
+  commit identity. Managed sessions use the `codex-native-ui` agent by default;
+  `OMNIGENT_AGENT_NAME` can select another installed agent explicitly.
+- Omnigent must be able to clone the private repository as the identity that
+  owns the managed session. When OBO is accepted, that is the workspace user;
+  after service-principal fallback, the app service principal is the execution
+  identity and must have a usable Git credential or linked account in the
+  managed sandbox.
 - Lakebase stores OAuth state, encrypted GitHub tokens, fix sessions, encrypted
   patches, approvals, and append-only commit audit records. The app service
   principal must create and own the `lineage_impact` schema.
@@ -114,10 +120,12 @@ Deployment is blocked until all of the following are resolved:
    encryption key.
 3. Register and restrict the GitHub App, then configure its real client ID,
    client secret, and canonical OAuth redirect URI.
-4. Validate managed Omnigent session creation, polling, cancellation, and diff
-   retrieval from the deployed app runtime. The integration tries user OBO
-   first and falls back to the app service principal only when OBO is not
-   authorized.
+4. Configure private-repository clone credentials for the Omnigent execution
+   identity, then validate managed session creation, polling, cancellation, and
+   diff retrieval from the deployed app runtime. The integration tries user
+   OBO first and falls back to the app service principal only when OBO is not
+   authorized; credentials linked only to the user do not cover a session
+   owned by the service-principal fallback.
 5. Make every validation gate below green.
 6. With a non-privileged test principal that has warehouse `CAN_USE` but no
    `SELECT` on a dedicated test table, execute the parameterized zero-row probe

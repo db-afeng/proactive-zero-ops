@@ -44,7 +44,7 @@ describe('Omnigent authentication', () => {
   it('dispatches a managed-session prompt as an event instead of a history-only initial item', async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ data: [{ id: 'agent-1', name: 'polly' }] }))
+      .mockResolvedValueOnce(jsonResponse({ data: [{ id: 'agent-1', name: 'codex-native-ui' }] }))
       .mockResolvedValueOnce(
         jsonResponse({ id: 'session-1', status: 'idle', sandbox_status: { stage: 'provisioning' } }, 201)
       )
@@ -80,6 +80,27 @@ describe('Omnigent authentication', () => {
       data: { role: 'user', content: [{ type: 'input_text', text: 'Make the narrow source change.' }] },
     });
     expect(requestUrl(fetchMock.mock.calls[2]?.[0])).toContain('/v1/sessions/session-1/events');
+  });
+
+  it('turns private-repository clone failures into actionable safe guidance', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        id: 'session-1',
+        status: 'failed',
+        last_task_error: {
+          code: 'sandbox_clone_failed',
+          message: 'Unable to clone repository: no Git credential is available for db-afeng/private-repo',
+        },
+      })
+    );
+    const client = new OmnigentClient({ workspaceHost: HOST, fetchImplementation: fetchMock });
+
+    await expect(client.getSession('session-1', { oboToken: OBO_TOKEN })).resolves.toMatchObject({
+      value: {
+        error:
+          'Omnigent could not clone this private repository. Configure a Git credential for the Omnigent execution identity and try again.',
+      },
+    });
   });
 
   it.each([401, 403])('falls back to the app service principal after OBO status %s', async (status) => {
