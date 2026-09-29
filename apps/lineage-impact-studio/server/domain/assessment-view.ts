@@ -82,6 +82,10 @@ export const AssessmentGraphEdgeSchema = z
     origin: z.enum(['observed_lineage', 'proposed_code', 'mixed', 'unknown']),
     evidenceLevel: z.enum(['column', 'table', 'definition']),
     lastObservedAt: z.iso.datetime({ offset: true }).nullable(),
+    sourceAsset: AssetReferenceSchema.nullable(),
+    sourceColumn: ColumnNameSchema.nullable(),
+    targetAsset: AssetReferenceSchema.nullable(),
+    targetColumn: ColumnNameSchema.nullable(),
   })
   .strict();
 
@@ -98,9 +102,9 @@ const DISCLOSURE_NOTICES = {
   none: 'Lineage details are hidden because you do not have access.',
 } as const;
 
-export const AssessmentViewV2Schema = z
+export const AssessmentViewV3Schema = z
   .object({
-    schemaVersion: z.literal(2),
+    schemaVersion: z.literal(3),
     reference: AssessmentReferenceSchema,
     detailState: z.enum(['available', 'legacy']),
     status: AssessmentStatusSchema,
@@ -171,27 +175,27 @@ export const AssessmentViewV2Schema = z
     }
   });
 
-export type AssessmentViewV2 = z.infer<typeof AssessmentViewV2Schema>;
+export type AssessmentViewV3 = z.infer<typeof AssessmentViewV3Schema>;
 
 export interface AssetAccessDecision {
   authorized: boolean;
   assetType: z.infer<typeof AssetTypeSchema>;
 }
 
-export interface AssessmentViewV2Input {
+export interface AssessmentViewV3Input {
   reference: string;
   projection: EvidenceProjection;
-  source: Omit<AssessmentViewV2['source'], 'evidenceOrigin'>;
-  pullRequest: AssessmentViewV2['pullRequest'];
-  viewer: AssessmentViewV2['viewer'];
+  source: Omit<AssessmentViewV3['source'], 'evidenceOrigin'>;
+  pullRequest: AssessmentViewV3['pullRequest'];
+  viewer: AssessmentViewV3['viewer'];
   access: ReadonlyMap<string, AssetAccessDecision>;
 }
 
 /** Build the browser DTO from deterministic evidence and per-asset OBO decisions. */
-export function createAssessmentViewV2(input: AssessmentViewV2Input): AssessmentViewV2 {
+export function createAssessmentViewV3(input: AssessmentViewV3Input): AssessmentViewV3 {
   if (input.projection.detailState === 'legacy') {
-    return AssessmentViewV2Schema.parse({
-      schemaVersion: 2,
+    return AssessmentViewV3Schema.parse({
+      schemaVersion: 3,
       reference: input.reference,
       detailState: 'legacy',
       status: input.projection.status,
@@ -264,8 +268,8 @@ export function createAssessmentViewV2(input: AssessmentViewV2Input): Assessment
     impacts,
   });
 
-  return AssessmentViewV2Schema.parse({
-    schemaVersion: 2,
+  return AssessmentViewV3Schema.parse({
+    schemaVersion: 3,
     reference: input.reference,
     detailState: 'available',
     status: input.projection.status,
@@ -291,8 +295,8 @@ function authorizedMessages(input: {
   fullyAuthorized: boolean;
   displayHeadline: string;
   displayAction: string;
-  changes: AssessmentViewV2['changes'];
-  impacts: AssessmentViewV2['impacts'];
+  changes: AssessmentViewV3['changes'];
+  impacts: AssessmentViewV3['impacts'];
 }): { headline: string; recommendedAction: string } {
   if (input.fullyAuthorized) {
     return { headline: input.displayHeadline, recommendedAction: input.displayAction };
@@ -318,8 +322,8 @@ function authorizedMessages(input: {
   };
 }
 
-export function serializeAssessmentViewV2(value: unknown): string {
-  return JSON.stringify(AssessmentViewV2Schema.parse(value));
+export function serializeAssessmentViewV3(value: unknown): string {
+  return JSON.stringify(AssessmentViewV3Schema.parse(value));
 }
 
 const SourceExpressionSchema = z.string().min(1).max(100_000).nullable();
@@ -358,14 +362,14 @@ export function serializeSourceEvidenceView(value: unknown): string {
 }
 
 function buildGraph(input: {
-  changes: AssessmentViewV2['changes'];
-  impacts: AssessmentViewV2['impacts'];
+  changes: AssessmentViewV3['changes'];
+  impacts: AssessmentViewV3['impacts'];
   evidenceEdges: readonly EvidenceEdgeInput[];
   access: ReadonlyMap<string, AssetAccessDecision>;
   includeRestricted: boolean;
-}): AssessmentViewV2['graph'] {
-  const nodes: AssessmentViewV2['graph']['nodes'] = [];
-  const edges: AssessmentViewV2['graph']['edges'] = [];
+}): AssessmentViewV3['graph'] {
+  const nodes: AssessmentViewV3['graph']['nodes'] = [];
+  const edges: AssessmentViewV3['graph']['edges'] = [];
   const nodeByAsset = new Map<string, string[]>();
   for (const change of input.changes) {
     const id = `change-${change.id}`;
@@ -429,14 +433,14 @@ function buildGraph(input: {
   const edgeKeys = new Set<string>();
   for (const impact of input.impacts) {
     const target = `impact-${impact.id}`;
-    const changedSource = input.changes.some((change) => change.id === impact.changeId)
-      ? `change-${impact.changeId}`
-      : undefined;
+    const change = input.changes.find((candidate) => candidate.id === impact.changeId);
+    const changedSource = change === undefined ? undefined : `change-${impact.changeId}`;
     if (impact.relation === 'direct' || impact.path.length < 2) {
       const source = changedSource ?? (input.includeRestricted ? 'restricted' : undefined);
       if (source === undefined || source === target) continue;
       const sourceAsset = impact.path[0]?.kind === 'asset' ? impact.path[0].reference : null;
       const evidence = findEvidenceEdge(input.evidenceEdges, sourceAsset, impact.targetAsset);
+      const authorizedEdge = sourceAsset !== null;
       pushGraphEdge(edges, edgeKeys, {
         id: `graph-${source}-${target}`,
         source,
@@ -444,6 +448,10 @@ function buildGraph(input: {
         origin: evidenceOrigin(evidence),
         evidenceLevel: evidence?.level ?? 'definition',
         lastObservedAt: evidence?.last_observed_at ?? null,
+        sourceAsset: authorizedEdge ? sourceAsset : null,
+        sourceColumn: authorizedEdge ? (evidence?.source_column ?? change?.column ?? null) : null,
+        targetAsset: authorizedEdge ? impact.targetAsset : null,
+        targetColumn: authorizedEdge ? (evidence?.target_column ?? impact.targetColumn) : null,
       });
       continue;
     }
@@ -462,6 +470,7 @@ function buildGraph(input: {
       const targetAsset = targetSegment?.kind === 'asset' ? targetSegment.reference : null;
       const evidence =
         targetAsset === null ? undefined : findEvidenceEdge(input.evidenceEdges, sourceAsset, targetAsset);
+      const authorizedEdge = sourceAsset !== null && targetAsset !== null;
       pushGraphEdge(edges, edgeKeys, {
         id: `graph-${source}-${destination}`,
         source,
@@ -472,6 +481,14 @@ function buildGraph(input: {
             : evidenceOrigin(evidence),
         evidenceLevel: evidence?.level ?? 'table',
         lastObservedAt: evidence?.last_observed_at ?? null,
+        sourceAsset: authorizedEdge ? sourceAsset : null,
+        sourceColumn: authorizedEdge
+          ? (evidence?.source_column ?? (index === 0 ? (change?.column ?? null) : null))
+          : null,
+        targetAsset: authorizedEdge ? targetAsset : null,
+        targetColumn: authorizedEdge
+          ? (evidence?.target_column ?? (index === impact.path.length - 2 ? impact.targetColumn : null))
+          : null,
       });
     }
   }
@@ -489,6 +506,10 @@ function buildGraph(input: {
         origin: 'unknown',
         evidenceLevel: 'table',
         lastObservedAt: null,
+        sourceAsset: null,
+        sourceColumn: null,
+        targetAsset: null,
+        targetColumn: null,
       });
     }
   }
@@ -498,6 +519,8 @@ function buildGraph(input: {
 interface EvidenceEdgeInput {
   source_asset: string;
   target_asset: string;
+  source_column: string | null;
+  target_column: string | null;
   level: 'column' | 'table';
   origins: readonly ('observed_lineage' | 'proposed_code')[];
   last_observed_at: string | null;
@@ -519,9 +542,9 @@ function evidenceOrigin(edge: EvidenceEdgeInput | undefined): 'observed_lineage'
 }
 
 function pushGraphEdge(
-  result: AssessmentViewV2['graph']['edges'],
+  result: AssessmentViewV3['graph']['edges'],
   keys: Set<string>,
-  edge: AssessmentViewV2['graph']['edges'][number]
+  edge: AssessmentViewV3['graph']['edges'][number]
 ): void {
   const key = `${edge.source}\u0000${edge.target}`;
   if (keys.has(key)) return;

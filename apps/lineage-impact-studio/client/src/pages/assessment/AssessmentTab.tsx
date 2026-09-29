@@ -21,7 +21,7 @@ import {
 import { ChevronDown, CircleAlert, EyeOff, Info, Layers3, RotateCw } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
-import type { AssessmentViewV2 } from '@/lib/contracts';
+import type { AssessmentViewV3 } from '@/lib/contracts';
 
 import { ImpactGraph } from './ImpactGraph';
 import { ImpactInspector } from './ImpactInspector';
@@ -29,7 +29,7 @@ import { ImpactList } from './ImpactList';
 
 type ImpactScope = 'direct' | 'all';
 
-export function AssessmentTab({ assessment }: { assessment: AssessmentViewV2 }) {
+export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) {
   const [scope, setScope] = useState<ImpactScope>('all');
   const [showContext, setShowContext] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -170,7 +170,12 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV2 }) 
                   onSelect={setSelectedId}
                 />
               </div>
-              <ImpactInspector assessment={assessment} selectedId={selectedId} onClose={() => setSelectedId(null)} />
+              <ImpactInspector
+                assessment={assessment}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                onClose={() => setSelectedId(null)}
+              />
             </div>
 
             <p className="text-sm text-muted-foreground md:hidden">Select an impact below to open its evidence.</p>
@@ -195,7 +200,7 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV2 }) 
   );
 }
 
-function LegacyAssessment({ assessment }: { assessment: AssessmentViewV2 }) {
+function LegacyAssessment({ assessment }: { assessment: AssessmentViewV3 }) {
   return (
     <div className="mx-auto max-w-3xl space-y-6 py-6">
       <Alert>
@@ -211,7 +216,7 @@ function LegacyAssessment({ assessment }: { assessment: AssessmentViewV2 }) {
   );
 }
 
-function ReviewContext({ assessment }: { assessment: AssessmentViewV2 }) {
+function ReviewContext({ assessment }: { assessment: AssessmentViewV3 }) {
   return (
     <Collapsible>
       <CollapsibleTrigger asChild>
@@ -252,11 +257,11 @@ function Metadata({ label, value, mono = false }: { label: string; value: string
   );
 }
 
-function formatSeverity(value: AssessmentViewV2['severity']) {
+function formatSeverity(value: AssessmentViewV3['severity']) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function formatDiscovery(value: AssessmentViewV2['confidence']['discovery']) {
+function formatDiscovery(value: AssessmentViewV3['confidence']['discovery']) {
   if (value === 'complete') return 'Complete';
   if (value === 'incomplete') return 'Incomplete';
   return 'Unknown';
@@ -266,13 +271,13 @@ function formatConfidence(value: number | null) {
   return value === null ? 'Unavailable' : `${String(Math.round(value * 100))}%`;
 }
 
-function formatFreshness(value: AssessmentViewV2['source']['freshness']) {
+function formatFreshness(value: AssessmentViewV3['source']['freshness']) {
   if (value === 'current') return 'Current';
   if (value === 'stale') return 'Stale';
   return 'Unknown';
 }
 
-function formatOrigin(value: AssessmentViewV2['source']['evidenceOrigin']) {
+function formatOrigin(value: AssessmentViewV3['source']['evidenceOrigin']) {
   if (value === 'observed_lineage') return 'Observed lineage';
   if (value === 'proposed_code') return 'Proposed code';
   if (value === 'mixed') return 'Observed + proposed';

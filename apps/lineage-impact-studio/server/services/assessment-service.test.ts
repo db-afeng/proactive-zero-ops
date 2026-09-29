@@ -2,7 +2,6 @@ import type { Request } from 'express';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  AssessmentPermissionCheckError,
   AssessmentService,
   AssessmentUnavailableError,
   DetailedEvidenceUnavailableError,
@@ -116,20 +115,21 @@ function edge(id: string, source: string, target: string) {
 function service(bytes = payload()) {
   return new AssessmentService({
     reader: { read: vi.fn().mockResolvedValue(bytes) },
-    assetAccessQuery: 'SELECT access',
     now: () => now,
   });
 }
 
-function authorizationRows(authorized = true) {
-  return {
-    data: [
-      { ordinal: 0, asset_reference: 'catalog.schema.allowed', can_select: authorized, asset_type: 'TABLE' },
-      { ordinal: 1, asset_reference: 'catalog.schema.allowed_two', can_select: authorized, asset_type: 'VIEW' },
-      { ordinal: 2, asset_reference: 'catalog.schema.hidden_one', can_select: false, asset_type: 'TABLE' },
-      { ordinal: 3, asset_reference: 'catalog.schema.hidden_two', can_select: false, asset_type: 'VIEW' },
-    ],
-  };
+function permissionError() {
+  return Object.assign(new Error('redacted'), { errorCode: 'INSUFFICIENT_PRIVILEGES' });
+}
+
+function partialAuthorizationQuery() {
+  return vi.fn((_statement: string, parameters: Record<string, { value?: string }>) => {
+    if (Object.values(parameters).some((parameter) => parameter.value?.includes('.hidden_') === true)) {
+      return Promise.reject(permissionError());
+    }
+    return Promise.resolve({ data: [] });
+  });
 }
 
 describe('AssessmentService', () => {
@@ -138,14 +138,14 @@ describe('AssessmentService', () => {
     const view = await studio.getView({
       request: request(),
       reference,
-      userAnalytics: { query: vi.fn().mockResolvedValue(authorizationRows()) },
+      userAnalytics: { query: partialAuthorizationQuery() },
     });
 
     expect(view.detailState).toBe('available');
     expect(view.impacts[0]?.path).toEqual([
-      { kind: 'asset', reference: 'catalog.schema.allowed', assetType: 'table' },
+      { kind: 'asset', reference: 'catalog.schema.allowed', assetType: 'unknown' },
       { kind: 'restricted' },
-      { kind: 'asset', reference: 'catalog.schema.allowed_two', assetType: 'view' },
+      { kind: 'asset', reference: 'catalog.schema.allowed_two', assetType: 'unknown' },
     ]);
     expect(view.graph.nodes.filter((node) => node.role === 'restricted')).toHaveLength(1);
     expect(view.disclosure.state).toBe('partial');
@@ -153,8 +153,8 @@ describe('AssessmentService', () => {
     expect(JSON.stringify(view)).not.toContain('secret target SQL');
     expect(createAuthorizedFixContext(view).authorizedLineage).toEqual([
       [
-        { reference: 'catalog.schema.allowed', assetType: 'table' },
-        { reference: 'catalog.schema.allowed_two', assetType: 'view' },
+        { reference: 'catalog.schema.allowed', assetType: 'unknown' },
+        { reference: 'catalog.schema.allowed_two', assetType: 'unknown' },
       ],
     ]);
 
@@ -180,7 +180,6 @@ describe('AssessmentService', () => {
   it('uses the same generic unavailable response for missing, expired, and no-access references', async () => {
     const missing = new AssessmentService({
       reader: { read: vi.fn().mockRejectedValue(new Error('missing')) },
-      assetAccessQuery: 'SELECT access',
     });
     await expect(
       missing.getView({ request: request(), reference, userAnalytics: { query: vi.fn() } })
@@ -198,18 +197,18 @@ describe('AssessmentService', () => {
       service().getView({
         request: request(),
         reference,
-        userAnalytics: { query: vi.fn().mockResolvedValue(authorizationRows(false)) },
+        userAnalytics: { query: vi.fn().mockRejectedValue(permissionError()) },
       })
     ).rejects.toBeInstanceOf(AssessmentUnavailableError);
   });
 
-  it('does not fall back when OBO verification fails', async () => {
+  it('fails closed when an unknown OBO verification failure leaves every asset unresolved', async () => {
     await expect(
       service().getView({
         request: request(),
         reference,
         userAnalytics: { query: vi.fn().mockRejectedValue(new Error('OBO denied')) },
       })
-    ).rejects.toBeInstanceOf(AssessmentPermissionCheckError);
+    ).rejects.toBeInstanceOf(AssessmentUnavailableError);
   });
 });

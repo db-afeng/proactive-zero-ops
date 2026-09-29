@@ -15,8 +15,9 @@ import { AlertCircle, ExternalLink, Github, Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { ApiRequestError, getSourceEvidence, githubLoginUrl } from '@/lib/api';
-import type { AssessmentGraphEdge, AssessmentImpact, AssessmentViewV2, SourceEvidenceView } from '@/lib/contracts';
+import type { AssessmentGraphEdge, AssessmentImpact, AssessmentViewV3, SourceEvidenceView } from '@/lib/contracts';
 
+import { DatasetSample } from './DatasetSample';
 import { isVerifiedBreak, operationLabel, reasonText, targetLabel } from './impact-copy';
 
 type SourceState =
@@ -28,10 +29,12 @@ type SourceState =
 export function ImpactInspector({
   assessment,
   selectedId,
+  onSelect,
   onClose,
 }: {
-  assessment: AssessmentViewV2;
+  assessment: AssessmentViewV3;
   selectedId: string | null;
+  onSelect: (id: string) => void;
   onClose: () => void;
 }) {
   const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 767px)').matches);
@@ -42,7 +45,9 @@ export function ImpactInspector({
     return () => query.removeEventListener('change', update);
   }, []);
 
-  const content = <InspectorContent key={selectedId ?? 'none'} assessment={assessment} selectedId={selectedId} />;
+  const content = (
+    <InspectorContent key={selectedId ?? 'none'} assessment={assessment} selectedId={selectedId} onSelect={onSelect} />
+  );
   if (mobile) {
     return (
       <Sheet open={selectedId !== null} onOpenChange={(open) => !open && onClose()}>
@@ -59,7 +64,15 @@ export function ImpactInspector({
   return <aside className="min-h-[32rem] border-l border-border pl-6">{content}</aside>;
 }
 
-function InspectorContent({ assessment, selectedId }: { assessment: AssessmentViewV2; selectedId: string | null }) {
+function InspectorContent({
+  assessment,
+  selectedId,
+  onSelect,
+}: {
+  assessment: AssessmentViewV3;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
   const [source, setSource] = useState<SourceState>({ kind: 'idle' });
 
   if (selectedId === null) {
@@ -92,7 +105,7 @@ function InspectorContent({ assessment, selectedId }: { assessment: AssessmentVi
     );
   }
 
-  if (edge !== undefined) return <EdgeDetails edge={edge} />;
+  if (edge !== undefined) return <EdgeDetails edge={edge} onSelect={onSelect} />;
   if (impact !== undefined) {
     return (
       <div className="space-y-5 pt-2">
@@ -118,6 +131,7 @@ function InspectorContent({ assessment, selectedId }: { assessment: AssessmentVi
           />
         </dl>
         <Remediation impact={impact} />
+        <DatasetSample asset={impact.targetAsset} column={impact.targetColumn} kind="impacted" />
         <SourceEvidence assessment={assessment} selectedId={impact.id} source={source} setSource={setSource} />
       </div>
     );
@@ -145,6 +159,7 @@ function InspectorContent({ assessment, selectedId }: { assessment: AssessmentVi
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recommended fix</p>
           <p className="mt-1 text-sm leading-6">{assessment.recommendedAction}</p>
         </div>
+        <DatasetSample asset={change.asset} column={change.column} kind="changed" />
         <SourceEvidence assessment={assessment} selectedId={change.id} source={source} setSource={setSource} />
       </div>
     );
@@ -159,7 +174,8 @@ function InspectorContent({ assessment, selectedId }: { assessment: AssessmentVi
   );
 }
 
-function EdgeDetails({ edge }: { edge: AssessmentGraphEdge }) {
+function EdgeDetails({ edge, onSelect }: { edge: AssessmentGraphEdge; onSelect: (id: string) => void }) {
+  const authorizedMapping = edge.sourceAsset !== null && edge.targetAsset !== null;
   return (
     <div className="space-y-5 pt-2">
       <div>
@@ -171,6 +187,20 @@ function EdgeDetails({ edge }: { edge: AssessmentGraphEdge }) {
       </div>
       <Separator />
       <dl className="space-y-3 text-sm">
+        {authorizedMapping ? (
+          <>
+            <Detail
+              label="Source mapping"
+              value={`${edge.sourceAsset}${edge.sourceColumn === null ? '' : `.${edge.sourceColumn}`}`}
+              mono
+            />
+            <Detail
+              label="Target mapping"
+              value={`${edge.targetAsset}${edge.targetColumn === null ? '' : `.${edge.targetColumn}`}`}
+              mono
+            />
+          </>
+        ) : null}
         <Detail label="Origin" value={formatOrigin(edge.origin)} />
         <Detail
           label="Specificity"
@@ -181,6 +211,11 @@ function EdgeDetails({ edge }: { edge: AssessmentGraphEdge }) {
           value={edge.lastObservedAt === null ? 'Not observed; proposed code' : formatDateTime(edge.lastObservedAt)}
         />
       </dl>
+      {authorizedMapping && edge.target.startsWith('impact-') ? (
+        <Button type="button" variant="outline" size="sm" onClick={() => onSelect(edge.target)}>
+          Open downstream sample
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -191,7 +226,7 @@ function SourceEvidence({
   source,
   setSource,
 }: {
-  assessment: AssessmentViewV2;
+  assessment: AssessmentViewV3;
   selectedId: string;
   source: SourceState;
   setSource: (value: SourceState) => void;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createAssessmentViewV2, serializeAssessmentViewV2 } from './assessment-view';
+import { createAssessmentViewV3, serializeAssessmentViewV3 } from './assessment-view';
 import type { EvidenceProjection } from './evidence-projection';
 
 const REFERENCE = 'lgr_0123456789abcdefghijklmnopqrstuv';
@@ -73,8 +73,8 @@ function projection(): Extract<EvidenceProjection, { detailState: 'available' }>
           id: 'edge-1',
           source_asset: 'catalog.schema.source',
           target_asset: 'catalog.schema.hidden',
-          source_column: null,
-          target_column: null,
+          source_column: 'balance',
+          target_column: 'hidden_balance',
           level: 'table',
           origins: ['proposed_code'],
           last_observed_at: null,
@@ -83,8 +83,8 @@ function projection(): Extract<EvidenceProjection, { detailState: 'available' }>
           id: 'edge-2',
           source_asset: 'catalog.schema.hidden',
           target_asset: 'catalog.schema.consumer',
-          source_column: null,
-          target_column: null,
+          source_column: 'hidden_balance',
+          target_column: 'exposure',
           level: 'table',
           origins: ['observed_lineage'],
           last_observed_at: null,
@@ -94,9 +94,9 @@ function projection(): Extract<EvidenceProjection, { detailState: 'available' }>
   };
 }
 
-describe('AssessmentViewV2 authorization boundary', () => {
+describe('AssessmentViewV3 authorization boundary', () => {
   it('uses one anonymous restricted placeholder and does not serialize raw expressions', () => {
-    const view = createAssessmentViewV2({
+    const view = createAssessmentViewV3({
       ...baseInput(),
       projection: projection(),
       access: new Map([
@@ -112,14 +112,25 @@ describe('AssessmentViewV2 authorization boundary', () => {
       { kind: 'asset', reference: 'catalog.schema.consumer', assetType: 'view' },
     ]);
     expect(view.graph.nodes.filter((node) => node.role === 'restricted')).toHaveLength(1);
-    const serialized = serializeAssessmentViewV2(view);
+    expect(
+      view.graph.edges
+        .filter((edge) => edge.source === 'restricted' || edge.target === 'restricted')
+        .every(
+          (edge) =>
+            edge.sourceAsset === null &&
+            edge.sourceColumn === null &&
+            edge.targetAsset === null &&
+            edge.targetColumn === null
+        )
+    ).toBe(true);
+    const serialized = serializeAssessmentViewV3(view);
     expect(serialized).not.toContain('catalog.schema.hidden');
     expect(serialized).not.toContain('secret before SQL');
     expect(serialized).not.toContain('secret target SQL');
   });
 
   it('returns a detail-free rerun state for legacy v2 evidence', () => {
-    const view = createAssessmentViewV2({
+    const view = createAssessmentViewV3({
       ...baseInput(),
       projection: { detailState: 'legacy', status: 'block', uniqueAssets: [] },
       access: new Map(),
@@ -132,7 +143,7 @@ describe('AssessmentViewV2 authorization boundary', () => {
   it('does not leak a hidden changed column or type through headline copy', () => {
     const projected = projection();
     projected.display.headline = 'secret_balance is now text and breaks a hidden consumer.';
-    const view = createAssessmentViewV2({
+    const view = createAssessmentViewV3({
       ...baseInput(),
       projection: projected,
       access: new Map([
@@ -141,7 +152,7 @@ describe('AssessmentViewV2 authorization boundary', () => {
         ['catalog.schema.consumer', { authorized: true, assetType: 'view' as const }],
       ]),
     });
-    const serialized = serializeAssessmentViewV2(view);
+    const serialized = serializeAssessmentViewV3(view);
     expect(serialized).not.toContain('secret_balance');
     expect(serialized).not.toContain('catalog.schema.source');
     expect(serialized).not.toContain('numeric');
@@ -149,7 +160,7 @@ describe('AssessmentViewV2 authorization boundary', () => {
   });
 
   it('labels an authorized intermediate path node as optional supporting context', () => {
-    const view = createAssessmentViewV2({
+    const view = createAssessmentViewV3({
       ...baseInput(),
       projection: projection(),
       access: new Map([
@@ -168,14 +179,22 @@ describe('AssessmentViewV2 authorization boundary', () => {
     expect(view.graph.edges.some((edge) => edge.source === 'context-1' && edge.target === 'impact-impact-1')).toBe(
       true
     );
+    expect(view.graph.edges).toContainEqual(
+      expect.objectContaining({
+        sourceAsset: 'catalog.schema.source',
+        sourceColumn: 'balance',
+        targetAsset: 'catalog.schema.hidden',
+        targetColumn: 'hidden_balance',
+      })
+    );
   });
 
   it('rejects arbitrary metadata at the final serialization boundary', () => {
-    const view = createAssessmentViewV2({
+    const view = createAssessmentViewV3({
       ...baseInput(),
       projection: { detailState: 'legacy', status: 'block', uniqueAssets: [] },
       access: new Map(),
     });
-    expect(() => serializeAssessmentViewV2({ ...view, evidence: { sql: 'SELECT secret' } })).toThrow();
+    expect(() => serializeAssessmentViewV3({ ...view, evidence: { sql: 'SELECT secret' } })).toThrow();
   });
 });

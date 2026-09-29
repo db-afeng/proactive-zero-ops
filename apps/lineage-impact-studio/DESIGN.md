@@ -24,12 +24,19 @@ diff surface that genuinely needs containment.
 ## Evidence-led assessment
 
 The assessment reading order is deliberately: what changed, why it breaks,
-what must be fixed, then review context. `AssessmentViewV2` contains only
+what must be fixed, then review context. `AssessmentViewV3` contains only
 strictly validated change facts, reason codes, fixed remediation kinds, and
 authorized causal graph elements. Exact SQL expressions and repository paths
 are excluded from that response and require a separate GitHub-authorized
 request which revalidates repository read access and the assessed base/head
 SHAs.
+
+Authorized graph edges carry source/target asset and column mappings. Any edge
+touching restricted lineage has all four mapping fields cleared. Selecting an
+authorized changed or impacted node runs a five-row, unordered OBO sample of
+current deployed data; warning and destructive column badges distinguish the
+changed and downstream impacted columns. Samples are never described as
+proposed pull-request output and disappear immediately when the OBO read fails.
 
 The graph has no decorative background or minimap. Proposed-code edges are
 dashed; observed lineage is solid. Only verified breaks use destructive color,

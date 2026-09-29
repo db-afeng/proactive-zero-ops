@@ -9,15 +9,15 @@ Databricks identity, and can review and approve one guarded remediation commit.
 
 - The app service principal reads immutable assessment envelopes from the
   restricted Unity Catalog Volume. The Volume grant is read-only.
-- Disclosure checks run against `system.information_schema` with the signed-in
-  user's forwarded token and the `sql` OBO scope. Missing or failed OBO
-  authentication must fail closed; it must never fall back to the service
-  principal.
+- Disclosure checks use batched, parameterized, zero-row `IDENTIFIER` probes
+  with the signed-in user's forwarded token and the `sql` OBO scope. Missing,
+  denied, timed-out, over-budget, or otherwise unresolved checks fail closed;
+  they never fall back to the service principal or scan `information_schema`.
 - `files.files` is intentionally not an OBO scope. Generic AppKit Files routes
   must remain denied; the service reads only validated envelope paths.
 - Restricted envelope v3 publishes deterministic `display_evidence` alongside
   the full server-only record. Browser responses use the redacted,
-  allowlisted `AssessmentViewV2` contract; legacy v2 records return only a
+  allowlisted `AssessmentViewV3` contract; legacy v2 records return only a
   rerun-required state. Raw model prose and exact SQL must not enter the normal
   browser payload, HTML, telemetry, or logs.
 - Exact expressions use `GET /api/assessments/:reference/source-evidence` and
@@ -112,6 +112,10 @@ Deployment is blocked until all of the following are resolved:
 4. Confirm Omnigent has a supported workspace API. Fix generation remains
    disabled and fail-closed if no programmable API is available.
 5. Make every validation gate below green.
+6. With a non-privileged test principal that has warehouse `CAN_USE` but no
+   `SELECT` on a dedicated test table, execute the parameterized zero-row probe
+   `SELECT 1 FROM IDENTIFIER(:asset) WHERE FALSE`. It must fail with an access
+   error. A successful empty result is a deployment blocker.
 
 ## Validation
 
@@ -148,4 +152,6 @@ the workflow's canonical app URL. Enable deep links only for newly published
 assessments; do not backfill historical v2 evidence. After the guard and app
 are deployed together, close PR #4 and open a replacement from the same branch
 to publish a v3 assessment and verify the complete causal chain before wider
-rollout.
+rollout. Confirm query history contains only zero-row OBO probes during initial
+load, no broad privilege query, and dataset sample queries only after an
+authorized changed or impacted node is selected.

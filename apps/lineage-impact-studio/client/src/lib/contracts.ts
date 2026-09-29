@@ -74,10 +74,14 @@ export interface AssessmentGraphEdge {
   origin: 'observed_lineage' | 'proposed_code' | 'mixed' | 'unknown';
   evidenceLevel: 'column' | 'table' | 'definition';
   lastObservedAt: string | null;
+  sourceAsset: string | null;
+  sourceColumn: string | null;
+  targetAsset: string | null;
+  targetColumn: string | null;
 }
 
-export interface AssessmentViewV2 {
-  schemaVersion: 2;
+export interface AssessmentViewV3 {
+  schemaVersion: 3;
   reference: string;
   detailState: 'available' | 'legacy';
   status: AssessmentStatus;

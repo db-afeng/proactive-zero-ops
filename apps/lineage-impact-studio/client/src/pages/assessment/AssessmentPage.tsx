@@ -23,7 +23,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router';
 
 import { ApiRequestError, getAssessment } from '@/lib/api';
-import type { AssessmentStatus, AssessmentViewV2 } from '@/lib/contracts';
+import type { AssessmentStatus, AssessmentViewV3 } from '@/lib/contracts';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
 import { AssessmentTab } from './AssessmentTab';
@@ -33,7 +33,7 @@ import { FixTab } from './FixTab';
 type WorkbenchTab = 'assessment' | 'fix' | 'audit';
 type AssessmentLoadState =
   | { kind: 'loading'; phase: 'initial' | 'slow' }
-  | { kind: 'ready'; assessment: AssessmentViewV2 }
+  | { kind: 'ready'; assessment: AssessmentViewV3 }
   | { kind: 'unavailable' }
   | { kind: 'error'; message: string };
 
@@ -130,7 +130,7 @@ export function AssessmentPage() {
   return <AssessmentWorkbench key={state.assessment.reference} assessment={state.assessment} />;
 }
 
-function AssessmentWorkbench({ assessment }: { assessment: AssessmentViewV2 }) {
+function AssessmentWorkbench({ assessment }: { assessment: AssessmentViewV3 }) {
   const [activeTab, setActiveTab] = useState<WorkbenchTab>(() => tabFromHash());
   const status = STATUS_PRESENTATION[assessment.status];
   const StatusIcon = status.icon;

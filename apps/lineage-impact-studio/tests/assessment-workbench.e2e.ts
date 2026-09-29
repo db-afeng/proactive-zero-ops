@@ -6,7 +6,7 @@ const HEAD_SHA = 'f1e2d3c4b5a697887766554433221100ffeeddcc';
 const PATCH_DIGEST = 'sha256:996a18d9270f53766792eb17edcf73d5540fe9dc56820cb5de161e1151c71dc8';
 
 const assessment = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   reference: REFERENCE,
   detailState: 'available',
   status: 'block',
@@ -184,7 +184,33 @@ function graphEdge(
   origin: 'observed_lineage' | 'proposed_code',
   evidenceLevel: 'column' | 'table' | 'definition'
 ) {
-  return { id, source, target, origin, evidenceLevel, lastObservedAt: null };
+  const sourceAsset = id === 'edge-4' ? null : 'proactive_zero_ops_catalog.proactive_zero_ops_bronze.loan_accounts';
+  const targetAsset =
+    id === 'edge-4'
+      ? null
+      : id === 'edge-1'
+        ? sourceAsset
+        : 'proactive_zero_ops_catalog.proactive_zero_ops_silver.loan_exposure';
+  const targetColumn =
+    id === 'edge-1'
+      ? 'non_negative_balance'
+      : id === 'edge-2'
+        ? 'effective_ead'
+        : id === 'edge-3'
+          ? 'utilization_ratio'
+          : null;
+  return {
+    id,
+    source,
+    target,
+    origin,
+    evidenceLevel,
+    lastObservedAt: null,
+    sourceAsset,
+    sourceColumn: sourceAsset === null ? null : 'outstanding_balance',
+    targetAsset,
+    targetColumn,
+  };
 }
 
 test.beforeEach(async ({ page }) => {
@@ -230,6 +256,38 @@ test('synchronizes graph filters, impact selection, and GitHub-gated source evid
   await expect(page.getByText('portfolio_expected_loss', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Fit impact graph to view' }).click();
   await page.getByRole('button', { name: 'Centre graph on changed column' }).click();
+});
+
+test('runs the OBO sample only after selection and highlights the impacted column', async ({ page }) => {
+  const analyticsRequests: Array<{ url: string; body: string }> = [];
+  page.on('request', (request) => {
+    if (request.url().includes('/api/analytics/query/')) {
+      analyticsRequests.push({ url: request.url(), body: request.postData() ?? '' });
+    }
+  });
+
+  await page.goto(`/assessments/${REFERENCE}`);
+  expect(analyticsRequests).toHaveLength(0);
+
+  await page.getByRole('button', { name: /Inspect direct impact on .*effective_ead/ }).click();
+  await expect(page.getByRole('heading', { name: 'Current dataset sample' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: /effective_ead Impacted/ })).toBeVisible();
+  await expect(page.getByText('1250.5', { exact: true })).toBeVisible();
+  expect(analyticsRequests).toHaveLength(1);
+  expect(analyticsRequests[0]?.url).toContain('dataset_sample');
+  expect(analyticsRequests[0]?.body).toContain('loan_exposure');
+  expect(analyticsRequests[0]?.body.toLowerCase()).not.toContain('information_schema');
+});
+
+test('hides sample values when access is revoked after assessment load', async ({ page }) => {
+  await page.unroute('**/api/analytics/query/dataset_sample*');
+  await page.route('**/api/analytics/query/dataset_sample*', async (route) => {
+    await fulfillSse(route, { type: 'error', error: 'INSUFFICIENT_PRIVILEGES' });
+  });
+  await page.goto(`/assessments/${REFERENCE}`);
+  await page.getByRole('button', { name: /Inspect direct impact on .*effective_ead/ }).click();
+  await expect(page.getByText('Sample access is no longer available', { exact: true })).toBeVisible();
+  await expect(page.getByText('1250.5', { exact: true })).toHaveCount(0);
 });
 
 test('supports keyboard navigation across the persistent workbench tabs', async ({ page }) => {
@@ -519,6 +577,16 @@ async function mockAssessmentApis(page: Page) {
       ],
     });
   });
+  await page.route('**/api/analytics/query/dataset_sample*', async (route) => {
+    await fulfillSse(route, {
+      type: 'result',
+      data: [
+        {
+          row_json: { account_id: 'A-100', effective_ead: 1250.5, risk_band: 'medium' },
+        },
+      ],
+    });
+  });
 }
 
 async function fulfillJson(route: Route, body: unknown, status = 200) {
@@ -526,5 +594,13 @@ async function fulfillJson(route: Route, body: unknown, status = 200) {
     status,
     contentType: 'application/json',
     body: JSON.stringify(body),
+  });
+}
+
+async function fulfillSse(route: Route, event: unknown) {
+  await route.fulfill({
+    status: 200,
+    contentType: 'text/event-stream',
+    body: `data: ${JSON.stringify(event)}\n\n`,
   });
 }

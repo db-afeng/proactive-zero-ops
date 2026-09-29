@@ -13,21 +13,17 @@ import type {
 
 declare module '@databricks/appkit-ui/react' {
   interface QueryRegistry {
-    asset_access: {
-      name: 'asset_access';
+    dataset_sample: {
+      name: 'dataset_sample';
       parameters: {
         /** STRING - use sql.string() */
-        assets_json: SQLStringMarker;
+        asset_reference: SQLStringMarker;
+        /** INT - use sql.int() */
+        sample_limit: SQLNumberMarker;
       };
       result: Array<{
-        /** @sqlType INT */
-        ordinal: number;
         /** @sqlType STRING */
-        asset_reference: string;
-        /** @sqlType BOOLEAN */
-        can_select: boolean;
-        /** @sqlType STRING */
-        asset_type: string;
+        row_json: string;
       }>;
     };
   }

@@ -1,10 +1,8 @@
 import { randomBytes } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 
 import type { Application, Request, Response } from 'express';
 
-import { serializeAssessmentViewV2, serializeSourceEvidenceView } from '../domain/assessment-view';
+import { serializeAssessmentViewV3, serializeSourceEvidenceView } from '../domain/assessment-view';
 import { parseAssessmentReference } from '../domain/identifiers';
 import { GitHubAppClient } from '../integrations/github';
 import { GitHubIntegrationError } from '../integrations/github/errors';
@@ -14,7 +12,6 @@ import { Aes256GcmCipher, decodeBase64EncryptionKey } from '../security/encrypti
 import { issueOAuthAttempt, OAUTH_COOKIE_OPTIONS } from '../security/oauth';
 import { OboAuthorizationError, requireOboRequest } from '../security/obo';
 import {
-  AssessmentPermissionCheckError,
   AssessmentService,
   AssessmentUnavailableError,
   DetailedEvidenceUnavailableError,
@@ -24,7 +21,6 @@ import { VolumeRestrictedEnvelopeReader, type VolumeReader } from '../services/r
 
 const OAUTH_BINDING_COOKIE = 'lineage_impact_oauth_binding';
 const OAUTH_RETURN_COOKIE = 'lineage_impact_oauth_return';
-const ASSET_QUERY_PATH = resolve(process.cwd(), 'config/queries/asset_access.obo.sql');
 const FIX_UNAVAILABLE_REASON =
   'Fix generation is disabled because this workspace has no supported Omnigent programming interface.';
 
@@ -52,7 +48,6 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
 
   const assessmentService = new AssessmentService({
     reader: new VolumeRestrictedEnvelopeReader(appkit.volume),
-    assetAccessQuery: await readFile(ASSET_QUERY_PATH, 'utf8'),
   });
   const oauth = optionalOAuthRuntime();
 
@@ -71,7 +66,7 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           reference: request.params.reference,
           userAnalytics: appkit.analytics.asUser(request),
         });
-        response.type('application/json').send(serializeAssessmentViewV2(view));
+        response.type('application/json').send(serializeAssessmentViewV3(view));
         metricStatus = 'succeeded';
       } catch (error) {
         metricStatus = assessmentMetricStatus(error);
@@ -327,10 +322,6 @@ function sendAssessmentError(response: Response, error: unknown): void {
     response.status(404).json({ code: 'ASSESSMENT_UNAVAILABLE', message: error.message });
     return;
   }
-  if (error instanceof AssessmentPermissionCheckError) {
-    response.status(403).json({ code: 'PERMISSION_CHECK_FAILED', message: error.message });
-    return;
-  }
   sendRouteError(response, error);
 }
 
@@ -384,7 +375,7 @@ function sendUnavailable(response: Response, message: string): void {
 type SafeRequestStatus = 'succeeded' | 'denied' | 'unavailable' | 'stale' | 'failed';
 
 function assessmentMetricStatus(error: unknown): SafeRequestStatus {
-  if (error instanceof AssessmentPermissionCheckError || error instanceof OboAuthorizationError) return 'denied';
+  if (error instanceof OboAuthorizationError) return 'denied';
   if (error instanceof AssessmentUnavailableError) return 'unavailable';
   return 'failed';
 }

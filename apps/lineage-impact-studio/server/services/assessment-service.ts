@@ -3,9 +3,9 @@ import { createHash } from 'node:crypto';
 import type { Request } from 'express';
 
 import {
-  createAssessmentViewV2,
+  createAssessmentViewV3,
   SourceEvidenceViewSchema,
-  type AssessmentViewV2,
+  type AssessmentViewV3,
   type SourceEvidenceView,
 } from '../domain/assessment-view';
 import { projectRestrictedEvidence } from '../domain/evidence-projection';
@@ -25,14 +25,6 @@ export class AssessmentUnavailableError extends Error {
   }
 }
 
-export class AssessmentPermissionCheckError extends Error {
-  override readonly name = 'AssessmentPermissionCheckError';
-
-  constructor() {
-    super('Your Databricks permissions could not be verified.');
-  }
-}
-
 export class DetailedEvidenceUnavailableError extends Error {
   override readonly name = 'DetailedEvidenceUnavailableError';
 
@@ -47,18 +39,15 @@ export interface RestrictedEnvelopeReader {
 
 export interface AssessmentServiceOptions {
   reader: RestrictedEnvelopeReader;
-  assetAccessQuery: string;
   now?: () => Date;
 }
 
 export class AssessmentService {
   readonly #reader: RestrictedEnvelopeReader;
-  readonly #assetAccessQuery: string;
   readonly #now: () => Date;
 
   constructor(options: AssessmentServiceOptions) {
     this.#reader = options.reader;
-    this.#assetAccessQuery = options.assetAccessQuery;
     this.#now = options.now ?? (() => new Date());
   }
 
@@ -66,24 +55,17 @@ export class AssessmentService {
     request: Request;
     reference: unknown;
     userAnalytics: UserAnalyticsExecutor;
-  }): Promise<AssessmentViewV2> {
+  }): Promise<AssessmentViewV3> {
     const viewer = requireOboRequest(options.request);
     const { reference, envelope } = await this.#load(options.reference);
     try {
       const freshness = assessmentFreshness(envelope.created_at, this.#now());
       if (freshness === 'expired') throw new AssessmentUnavailableError();
       const projection = projectRestrictedEvidence(envelope);
-      let access: Awaited<ReturnType<typeof authorizeAssets>>;
-      try {
-        access = await authorizeAssets({
-          executor: options.userAnalytics,
-          queryText: this.#assetAccessQuery,
-          assets: projection.uniqueAssets,
-        });
-      } catch (error) {
-        console.warn('[lineage-impact-studio] Assessment permission check failed', safeErrorType(error));
-        throw new AssessmentPermissionCheckError();
-      }
+      const access = await authorizeAssets({
+        executor: options.userAnalytics,
+        assets: projection.uniqueAssets,
+      });
 
       const anyAuthorized = [...access.values()].some((decision) => decision.authorized);
       if (projection.uniqueAssets.length > 0 && !anyAuthorized) {
@@ -91,7 +73,7 @@ export class AssessmentService {
         throw new AssessmentUnavailableError();
       }
 
-      return createAssessmentViewV2({
+      return createAssessmentViewV3({
         reference,
         projection,
         source: {
@@ -109,7 +91,7 @@ export class AssessmentService {
         access,
       });
     } catch (error) {
-      if (error instanceof AssessmentUnavailableError || error instanceof AssessmentPermissionCheckError) throw error;
+      if (error instanceof AssessmentUnavailableError) throw error;
       console.warn('[lineage-impact-studio] Assessment unavailable after envelope load', safeErrorType(error));
       throw new AssessmentUnavailableError();
     }
@@ -117,7 +99,7 @@ export class AssessmentService {
 
   async getSourceEvidence(options: {
     reference: unknown;
-    authorizedView: AssessmentViewV2;
+    authorizedView: AssessmentViewV3;
   }): Promise<SourceEvidenceView> {
     const { reference, envelope } = await this.#load(options.reference);
     if (envelope.schema_version !== 3 || options.authorizedView.detailState !== 'available') {
@@ -163,7 +145,7 @@ export class AssessmentService {
   }
 }
 
-export function createAuthorizedFixContext(view: AssessmentViewV2) {
+export function createAuthorizedFixContext(view: AssessmentViewV3) {
   const authorizedLineage = view.impacts.map((impact) =>
     impact.path
       .filter((segment) => segment.kind === 'asset')
@@ -180,7 +162,7 @@ export function createAuthorizedFixContext(view: AssessmentViewV2) {
   };
 }
 
-function assessmentFreshness(createdAtValue: string, now: Date): AssessmentViewV2['source']['freshness'] | 'expired' {
+function assessmentFreshness(createdAtValue: string, now: Date): AssessmentViewV3['source']['freshness'] | 'expired' {
   const createdAt = Date.parse(createdAtValue);
   const age = now.getTime() - createdAt;
   if (!Number.isFinite(age) || age < 0) return 'unknown';

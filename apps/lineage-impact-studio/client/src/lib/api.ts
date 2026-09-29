@@ -1,5 +1,5 @@
 import type {
-  AssessmentViewV2,
+  AssessmentViewV3,
   AuditResponse,
   Capabilities,
   CommitOutcome,
@@ -86,7 +86,7 @@ function unwrapSession(value: FixSession | { session: FixSession }): FixSession 
 }
 
 export function getAssessment(reference: string, signal?: AbortSignal) {
-  return requestJson<AssessmentViewV2>(
+  return requestJson<AssessmentViewV3>(
     `/api/assessments/${encodeURIComponent(reference)}`,
     {
       cache: 'no-store',
