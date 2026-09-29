@@ -11,10 +11,11 @@ SELECT
   borrower_id,
   product_type,
   CAST(credit_limit_raw AS DECIMAL(18, 2)) AS credit_limit,
+  CAST(outstanding_balance_raw AS DECIMAL(18, 2)) AS outstanding_balance,
   CONCAT(
     'AUD ',
     FORMAT_NUMBER(CAST(outstanding_balance_raw AS DECIMAL(18, 2)), 2)
-  ) AS outstanding_balance,
+  ) AS outstanding_balance_formatted,
   CAST(undrawn_commitment_raw AS DECIMAL(18, 2)) AS undrawn_commitment,
   CAST(days_past_due_raw AS INT) AS days_past_due,
   CAST(as_of_date_raw AS DATE) AS as_of_date
