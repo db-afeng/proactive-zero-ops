@@ -48,3 +48,14 @@ def test_workflow_binds_envelope_to_pr_and_uploads_only_public_artifacts() -> No
     assert "assessment.md" in upload
     assert "LINEAGE_GUARD_RESTRICTED_DIR" not in upload
     assert "restricted" not in upload.lower()
+
+
+def test_automatic_fix_starts_for_every_failed_assessment() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    automatic_fix = workflow.split(
+        "name: Start and finalize automatic fix proposal", maxsplit=1
+    )[1].split("name: Write job summary", maxsplit=1)[0]
+    assert "steps.public.outputs.exit_code == '1'" in automatic_fix
+    assert "steps.public.outputs.exit_code == '2'" in automatic_fix
+    assert "steps.public.outputs.exit_code == '0'" not in automatic_fix

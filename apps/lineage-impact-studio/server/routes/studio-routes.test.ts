@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { GitHubIntegrationError } from '../integrations/github/errors';
 import { PersistenceError } from '../persistence/repository';
 import { OboAuthorizationError } from '../security/obo';
-import { oauthCallbackFailureCode } from './studio-routes';
+import { isFailedAssessmentStatus, oauthCallbackFailureCode } from './studio-routes';
 
 describe('OAuth callback diagnostics', () => {
   it('reports only allowlisted failure codes', () => {
@@ -16,5 +16,15 @@ describe('OAuth callback diagnostics', () => {
     );
     expect(oauthCallbackFailureCode(new Error('invalid_oauth_callback'))).toBe('invalid_callback');
     expect(oauthCallbackFailureCode(new Error('contains-sensitive-details'))).toBe('unexpected');
+  });
+});
+
+describe('automatic fix assessment status gate', () => {
+  it.each(['block', 'error'] as const)('accepts failed assessment status %s', (status) => {
+    expect(isFailedAssessmentStatus(status)).toBe(true);
+  });
+
+  it.each(['pass', 'warn'] as const)('rejects non-failing assessment status %s', (status) => {
+    expect(isFailedAssessmentStatus(status)).toBe(false);
   });
 });

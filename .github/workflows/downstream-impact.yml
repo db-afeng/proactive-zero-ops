@@ -304,7 +304,8 @@ jobs:
         if: >-
           ${{ always()
               && steps.public.outcome == 'success'
-              && steps.public.outputs.exit_code == '1'
+              && (steps.public.outputs.exit_code == '1'
+                  || steps.public.outputs.exit_code == '2')
               && steps.publication.outputs.published == 'true'
               && steps.public.outputs.assessment_reference == steps.publication.outputs.assessment_reference }}
         continue-on-error: true
