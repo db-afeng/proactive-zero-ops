@@ -26,6 +26,12 @@ variables:
   lineage_impact_encryption_secret_key:
     description: Secret key containing a canonical base64-encoded 32-byte encryption key.
     default: encryption-key
+  lineage_impact_github_client_id_secret_key:
+    description: Secret key containing the GitHub App client ID.
+    default: github-client-id
+  lineage_impact_github_client_secret_secret_key:
+    description: Secret key containing the GitHub App client secret.
+    default: github-client-secret
 
 targets:
   dev:

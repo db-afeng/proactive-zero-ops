@@ -28,3 +28,13 @@ resources:
             scope: ${var.lineage_impact_secret_scope}
             key: ${var.lineage_impact_encryption_secret_key}
             permission: READ
+        - name: github-client-id
+          secret:
+            scope: ${var.lineage_impact_secret_scope}
+            key: ${var.lineage_impact_github_client_id_secret_key}
+            permission: READ
+        - name: github-client-secret
+          secret:
+            scope: ${var.lineage_impact_secret_scope}
+            key: ${var.lineage_impact_github_client_secret_secret_key}
+            permission: READ
