@@ -1,13 +1,14 @@
 import type { AssessmentImpact } from '@/lib/contracts';
 
 export function targetLabel(impact: AssessmentImpact) {
-  return impact.targetColumn === null ? impact.targetAsset : `${impact.targetAsset}.${impact.targetColumn}`;
+  const assetName = impact.targetAsset.split('.').at(-1) ?? impact.targetAsset;
+  return impact.targetColumn === null ? assetName : `${assetName}.${impact.targetColumn}`;
 }
 
 export function reasonText(impact: AssessmentImpact) {
   switch (impact.reason) {
     case 'incompatible_type':
-      return `${operationLabel(impact.operation)} still expects the previous type contract.`;
+      return `${capitalize(operationLabel(impact.operation))} still expects the previous type contract.`;
     case 'missing_column':
       return 'This consumer still references a column that the change removes.';
     case 'renamed_column':
@@ -21,6 +22,10 @@ export function reasonText(impact: AssessmentImpact) {
     case 'manual_review':
       return 'The available evidence is not specific enough to determine compatibility automatically.';
   }
+}
+
+function capitalize(value: string) {
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
 }
 
 export function operationLabel(operation: AssessmentImpact['operation']) {

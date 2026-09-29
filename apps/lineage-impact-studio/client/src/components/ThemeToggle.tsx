@@ -11,7 +11,7 @@ export function ThemeToggle() {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="outline"
       size="icon-sm"
       aria-label={label}
       title={label}

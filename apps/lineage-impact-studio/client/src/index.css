@@ -11,6 +11,49 @@ body {
   background: var(--background);
 }
 
+#root {
+  min-height: 100vh;
+}
+
+.impact-graph-canvas {
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--muted-foreground) 25%, transparent) 1px,
+    transparent 1px
+  );
+  background-position: 0 0;
+  background-size: 16px 16px;
+}
+
+.impact-graph-canvas .react-flow__pane {
+  cursor: default;
+}
+
+.impact-node-selected {
+  box-shadow:
+    0 0 0 2px var(--chart-cat-1),
+    0 0 0 4px var(--background);
+}
+
+.impact-row-selected {
+  border-left-color: var(--chart-cat-1);
+  background: color-mix(in srgb, var(--chart-cat-1) 8%, transparent);
+}
+
+[data-slot='tabs-trigger'].workbench-tab {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+[data-slot='tabs-trigger'].workbench-tab[data-state='active'] {
+  border-bottom-color: var(--foreground);
+  background: transparent;
+  box-shadow: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

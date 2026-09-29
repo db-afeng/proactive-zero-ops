@@ -1,9 +1,8 @@
 import { Badge, Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@databricks/appkit-ui/react';
-import { ChevronRight } from 'lucide-react';
 
 import type { AssessmentImpact } from '@/lib/contracts';
 
-import { isVerifiedBreak, reasonText, targetLabel } from './impact-copy';
+import { isVerifiedBreak, operationLabel, targetLabel } from './impact-copy';
 
 export function ImpactList({
   impacts,
@@ -26,37 +25,52 @@ export function ImpactList({
   }
 
   return (
-    <ol className="divide-y divide-border border-y border-border" aria-label="Downstream impacts">
-      {impacts.map((impact) => {
-        const nodeId = `impact-${impact.id}`;
-        const selected = selectedId === nodeId;
-        return (
-          <li key={impact.id}>
-            <button
-              type="button"
-              className={`grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-4 px-1 py-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${selected ? 'bg-muted/50' : 'hover:bg-muted/30'}`}
-              aria-pressed={selected}
-              aria-label={`Inspect ${impact.relation} impact on ${targetLabel(impact)}`}
-              onClick={() => onSelect(nodeId)}
-            >
-              <span className="min-w-0">
-                <span className="flex flex-wrap items-center gap-2">
-                  <code className="break-all font-mono text-sm font-medium">{targetLabel(impact)}</code>
-                  <Badge variant={impact.relation === 'direct' && isVerifiedBreak(impact) ? 'destructive' : 'outline'}>
-                    {impact.relation === 'transitive'
-                      ? 'Transitive impact'
-                      : isVerifiedBreak(impact)
-                        ? 'Direct break'
-                        : 'Supporting context'}
+    <div className="overflow-hidden rounded-sm border border-border">
+      <div
+        className="hidden grid-cols-[7rem_minmax(16rem,1fr)_11rem_10rem] gap-3 border-b border-border bg-muted/25 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground md:grid"
+        aria-hidden="true"
+      >
+        <span>Relation</span>
+        <span>Target</span>
+        <span>Operation</span>
+        <span>Evidence</span>
+      </div>
+      <ol className="divide-y divide-border" aria-label="Downstream impacts">
+        {impacts.map((impact) => {
+          const nodeId = `impact-${impact.id}`;
+          const selected = selectedId === nodeId;
+          return (
+            <li key={impact.id}>
+              <button
+                type="button"
+                className={`grid w-full gap-2 border-l-2 px-3 py-3 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring md:grid-cols-[7rem_minmax(16rem,1fr)_11rem_10rem] md:items-center md:gap-3 ${selected ? 'impact-row-selected' : 'border-l-transparent hover:bg-muted/30'}`}
+                aria-pressed={selected}
+                aria-label={`Inspect ${impact.relation} impact on ${targetLabel(impact)}`}
+                onClick={() => onSelect(nodeId)}
+              >
+                <span>
+                  <Badge variant="outline" className="font-normal">
+                    {impact.relation === 'transitive' ? 'Transitive' : 'Direct'}
                   </Badge>
                 </span>
-                <span className="mt-1.5 block text-sm leading-6 text-muted-foreground">{reasonText(impact)}</span>
-              </span>
-              <ChevronRight className="size-4 text-muted-foreground" aria-hidden="true" />
-            </button>
-          </li>
-        );
-      })}
-    </ol>
+                <code className="min-w-0 break-all font-mono text-sm font-medium">{targetLabel(impact)}</code>
+                <span className="text-muted-foreground md:text-foreground">
+                  <span className="mr-1 text-xs text-muted-foreground md:hidden">Operation:</span>
+                  {operationLabel(impact.operation)}
+                </span>
+                <span className="text-muted-foreground md:text-foreground">
+                  <span className="mr-1 text-xs text-muted-foreground md:hidden">Evidence:</span>
+                  {impact.evidenceLevel === 'definition'
+                    ? 'Parsed definition'
+                    : isVerifiedBreak(impact)
+                      ? 'Verified definition'
+                      : 'Verified lineage'}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
   );
 }

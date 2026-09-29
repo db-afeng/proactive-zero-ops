@@ -16,9 +16,8 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Separator,
 } from '@databricks/appkit-ui/react';
-import { ChevronDown, CircleAlert, EyeOff, Info, Layers3, RotateCw } from 'lucide-react';
+import { Check, ChevronDown, CircleAlert, RotateCw } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import type { AssessmentViewV3 } from '@/lib/contracts';
@@ -53,10 +52,10 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) 
   if (assessment.detailState === 'legacy') return <LegacyAssessment assessment={assessment} />;
 
   return (
-    <div className="space-y-8">
+    <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
       {assessment.source.freshness !== 'current' ? (
-        <Alert className="border-warning/50">
-          <CircleAlert className="text-warning-foreground" aria-hidden="true" />
+        <Alert className="m-4 shrink-0 border-warning/50 md:mx-6">
+          <CircleAlert className="text-warning" aria-hidden="true" />
           <AlertTitle>
             {assessment.source.freshness === 'stale' ? 'Assessment is stale' : 'Freshness could not be confirmed'}
           </AlertTitle>
@@ -64,138 +63,136 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) 
         </Alert>
       ) : null}
 
-      {assessment.disclosure.state !== 'full' ? (
-        <Alert>
-          <EyeOff aria-hidden="true" />
-          <AlertTitle>
-            {assessment.disclosure.state === 'partial'
-              ? 'Some lineage is restricted'
-              : 'Lineage details are restricted'}
-          </AlertTitle>
-          <AlertDescription>{assessment.disclosure.notice}</AlertDescription>
-        </Alert>
-      ) : null}
-
-      <section aria-labelledby="assessment-summary-title" className="space-y-5">
-        <div className="space-y-3">
+      <section
+        aria-labelledby="assessment-summary-title"
+        className="shrink-0 border-b border-border px-4 py-3 md:px-6 lg:grid lg:min-h-44 lg:grid-cols-[minmax(0,1fr)_26.5rem]"
+      >
+        <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={assessment.status === 'block' || assessment.status === 'error' ? 'destructive' : 'outline'}>
+            <Badge
+              variant={assessment.status === 'block' || assessment.status === 'error' ? 'destructive' : 'outline'}
+              className="px-2.5"
+            >
               {assessment.status.toUpperCase()}
             </Badge>
-            <Badge variant="outline">{formatSeverity(assessment.severity)} severity</Badge>
+            <Badge variant="outline" className="px-2.5 font-normal">
+              {formatSeverity(assessment.severity)} severity
+            </Badge>
+            {assessment.disclosure.state !== 'full' ? (
+              <>
+                <Badge variant="outline" className="px-2.5 font-normal">
+                  {assessment.disclosure.state === 'partial' ? 'Partial lineage' : 'Restricted lineage'}
+                </Badge>
+                <span className="sr-only">
+                  {assessment.disclosure.state === 'partial'
+                    ? 'Some lineage is restricted'
+                    : 'Lineage details are restricted'}
+                </span>
+              </>
+            ) : null}
           </div>
           <h1
             id="assessment-summary-title"
-            className="max-w-[72ch] text-2xl font-semibold leading-tight tracking-tight"
+            className="mt-3 max-w-[58rem] font-mono text-2xl font-semibold leading-tight tracking-tight"
           >
             {assessment.headline}
           </h1>
+
+          <dl className="mt-3 flex flex-wrap gap-x-10 gap-y-3 text-sm">
+            <SummaryFact label="Discovery certainty" value={formatDiscovery(assessment.confidence.discovery)} />
+            <SummaryFact
+              label="Freshness"
+              value={`${formatFreshness(assessment.source.freshness)} · ${formatDateTime(assessment.source.createdAt)}`}
+            />
+          </dl>
         </div>
 
-        <Alert className="max-w-[75ch] border-border">
-          <Info aria-hidden="true" />
-          <AlertTitle>Recommended action</AlertTitle>
-          <AlertDescription className="text-sm leading-6">{assessment.recommendedAction}</AlertDescription>
-        </Alert>
-
-        <dl className="grid max-w-4xl gap-x-8 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-          <SummaryFact label="Discovery certainty" value={formatDiscovery(assessment.confidence.discovery)} />
-          <SummaryFact
-            label="Interpretation confidence"
-            value={formatConfidence(assessment.confidence.interpretation)}
-          />
-          <SummaryFact label="Freshness" value={formatFreshness(assessment.source.freshness)} />
-          <SummaryFact label="Evidence origin" value={formatOrigin(assessment.source.evidenceOrigin)} />
-        </dl>
+        <div className="mt-5 border-l-2 border-foreground pl-4 lg:ml-8 lg:mt-0 lg:self-start">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Recommended action</p>
+          <p className="mt-2 text-sm leading-6">{assessment.recommendedAction}</p>
+        </div>
       </section>
 
-      <Separator />
-
-      <section aria-labelledby="impact-map-title" className="space-y-4">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h2 id="impact-map-title" className="text-lg font-semibold">
-              Causal impact map
-            </h2>
-            <p className="mt-1 max-w-[72ch] text-sm leading-6 text-muted-foreground">
-              Only changed columns and deterministically grounded blocking paths are shown. Select an item to see why it
-              breaks and how to remediate it.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Select
-              value={scope}
-              onValueChange={(value) => {
-                if (value === 'direct' || value === 'all') setScope(value);
-              }}
-            >
-              <SelectTrigger className="w-44" aria-label="Impact scope">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Direct + transitive</SelectItem>
-                <SelectItem value="direct">Direct breaks only</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              aria-pressed={showContext}
-              onClick={() => setShowContext((value) => !value)}
-            >
-              <Layers3 aria-hidden="true" />
-              {showContext ? 'Hide context' : 'Show context'}
-            </Button>
-          </div>
-        </div>
-
-        {visible.nodes.length === 0 ? (
-          <Empty className="min-h-52 border border-border">
-            <EmptyHeader>
-              <EmptyTitle>No verified causal graph is available</EmptyTitle>
-              <EmptyDescription>
-                Re-run the assessment if this change should have downstream consumers.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          <>
-            <div className="md:grid md:grid-cols-[minmax(0,1fr)_20rem] md:gap-6">
-              <div className="hidden md:block">
-                <ImpactGraph
-                  nodes={visible.nodes}
-                  edges={visible.edges}
-                  selectedId={selectedId}
-                  onSelect={setSelectedId}
-                />
+      <div className="lg:grid lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_26.5rem]">
+        <div className="space-y-6 px-4 py-4 md:px-6 lg:min-h-0 lg:overflow-y-auto lg:py-3">
+          <section aria-labelledby="impact-map-title" className="space-y-2">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <h2 id="impact-map-title" className="text-base font-semibold">
+                Causal impact map
+              </h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <Select
+                  value={scope}
+                  onValueChange={(value) => {
+                    if (value === 'direct' || value === 'all') setScope(value);
+                  }}
+                >
+                  <SelectTrigger className="w-44" aria-label="Impact scope">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Direct + transitive</SelectItem>
+                    <SelectItem value="direct">Direct breaks only</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-pressed={showContext}
+                  onClick={() => setShowContext((value) => !value)}
+                >
+                  <span className="flex size-3.5 items-center justify-center rounded-[2px] border border-border">
+                    {showContext ? <Check className="size-3" aria-hidden="true" /> : null}
+                  </span>
+                  {showContext ? 'Hide context' : 'Show context'}
+                </Button>
               </div>
-              <ImpactInspector
-                assessment={assessment}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
-                onClose={() => setSelectedId(null)}
-              />
             </div>
 
-            <p className="text-sm text-muted-foreground md:hidden">Select an impact below to open its evidence.</p>
-          </>
-        )}
-      </section>
+            {visible.nodes.length === 0 ? (
+              <Empty className="min-h-52 border border-border">
+                <EmptyHeader>
+                  <EmptyTitle>No verified causal graph is available</EmptyTitle>
+                  <EmptyDescription>
+                    Re-run the assessment if this change should have downstream consumers.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : (
+              <>
+                <div className="hidden md:block">
+                  <ImpactGraph
+                    nodes={visible.nodes}
+                    edges={visible.edges}
+                    impacts={assessment.impacts}
+                    changes={assessment.changes}
+                    selectedId={selectedId}
+                    onSelect={setSelectedId}
+                  />
+                </div>
+                <p className="text-sm text-muted-foreground md:hidden">Select an impact below to open its evidence.</p>
+              </>
+            )}
+          </section>
 
-      <section aria-labelledby="impact-list-title" className="space-y-3">
-        <div>
-          <h2 id="impact-list-title" className="text-lg font-semibold">
-            Impact list
-          </h2>
-          <p className="mt-1 text-sm text-muted-foreground">Keyboard-accessible view synchronized with the graph.</p>
+          <section aria-labelledby="impact-list-title" className="space-y-3">
+            <h2 id="impact-list-title" className="text-base font-semibold">
+              Impact list
+            </h2>
+            <ImpactList impacts={visible.impacts} selectedId={selectedId} onSelect={setSelectedId} />
+          </section>
+
+          <ReviewContext assessment={assessment} />
         </div>
-        <ImpactList impacts={visible.impacts} selectedId={selectedId} onSelect={setSelectedId} />
-      </section>
 
-      <Separator />
-
-      <ReviewContext assessment={assessment} />
+        <ImpactInspector
+          assessment={assessment}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          onClose={() => setSelectedId(null)}
+        />
+      </div>
     </div>
   );
 }
@@ -241,9 +238,9 @@ function ReviewContext({ assessment }: { assessment: AssessmentViewV3 }) {
 
 function SummaryFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="border-l border-border pl-3">
+    <div>
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-1 font-medium">{value}</dd>
+      <dd className="mt-0.5 font-semibold">{value}</dd>
     </div>
   );
 }
@@ -267,25 +264,23 @@ function formatDiscovery(value: AssessmentViewV3['confidence']['discovery']) {
   return 'Unknown';
 }
 
-function formatConfidence(value: number | null) {
-  return value === null ? 'Unavailable' : `${String(Math.round(value * 100))}%`;
-}
-
 function formatFreshness(value: AssessmentViewV3['source']['freshness']) {
   if (value === 'current') return 'Current';
   if (value === 'stale') return 'Stale';
   return 'Unknown';
 }
 
-function formatOrigin(value: AssessmentViewV3['source']['evidenceOrigin']) {
-  if (value === 'observed_lineage') return 'Observed lineage';
-  if (value === 'proposed_code') return 'Proposed code';
-  if (value === 'mixed') return 'Observed + proposed';
-  return 'Unavailable';
-}
-
 function formatDateTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) return value;
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? '';
+  return `${part('day')} ${part('month')} ${part('year')}, ${part('hour')}:${part('minute')}`;
 }

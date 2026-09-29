@@ -121,7 +121,7 @@ function SampleTable({
                         {highlighted ? (
                           <Badge
                             variant={kind === 'impacted' ? 'destructive' : 'outline'}
-                            className={kind === 'changed' ? 'border-warning/50 text-warning-foreground' : undefined}
+                            className={kind === 'changed' ? 'border-warning/50 text-warning' : undefined}
                           >
                             {kind === 'changed' ? 'Changed' : 'Impacted'}
                           </Badge>

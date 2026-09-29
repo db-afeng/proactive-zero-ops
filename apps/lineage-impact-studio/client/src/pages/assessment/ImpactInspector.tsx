@@ -11,7 +11,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@databricks/appkit-ui/react';
-import { AlertCircle, ExternalLink, Github, Loader2 } from 'lucide-react';
+import { AlertCircle, ExternalLink, Github, Loader2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { ApiRequestError, getSourceEvidence, githubLoginUrl } from '@/lib/api';
@@ -37,16 +37,22 @@ export function ImpactInspector({
   onSelect: (id: string) => void;
   onClose: () => void;
 }) {
-  const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 767px)').matches);
+  const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 1023px)').matches);
   useEffect(() => {
-    const query = window.matchMedia('(max-width: 767px)');
+    const query = window.matchMedia('(max-width: 1023px)');
     const update = () => setMobile(query.matches);
     query.addEventListener('change', update);
     return () => query.removeEventListener('change', update);
   }, []);
 
   const content = (
-    <InspectorContent key={selectedId ?? 'none'} assessment={assessment} selectedId={selectedId} onSelect={onSelect} />
+    <InspectorContent
+      key={selectedId ?? 'none'}
+      assessment={assessment}
+      selectedId={selectedId}
+      onSelect={onSelect}
+      onClose={onClose}
+    />
   );
   if (mobile) {
     return (
@@ -56,28 +62,37 @@ export function ImpactInspector({
             <SheetTitle>Impact evidence</SheetTitle>
             <SheetDescription>Why this node or relationship is affected and what to fix.</SheetDescription>
           </SheetHeader>
-          <div className="mt-5">{content}</div>
+          <div className="-mx-4 mt-5">{content}</div>
         </SheetContent>
       </Sheet>
     );
   }
-  return <aside className="min-h-[32rem] border-l border-border pl-6">{content}</aside>;
+  return (
+    <aside
+      className="hidden min-h-0 overflow-y-auto border-l border-border bg-background lg:block"
+      aria-label="Impact evidence"
+    >
+      {content}
+    </aside>
+  );
 }
 
 function InspectorContent({
   assessment,
   selectedId,
   onSelect,
+  onClose,
 }: {
   assessment: AssessmentViewV3;
   selectedId: string | null;
   onSelect: (id: string) => void;
+  onClose: () => void;
 }) {
   const [source, setSource] = useState<SourceState>({ kind: 'idle' });
 
   if (selectedId === null) {
     return (
-      <div className="pt-2">
+      <div className="p-6">
         <h3 className="text-sm font-semibold">Select an impact</h3>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           Choose a graph element or impact-list row to inspect its operation, evidence, and remediation.
@@ -95,127 +110,189 @@ function InspectorContent({
 
   if (node?.role === 'restricted') {
     return (
-      <div className="space-y-3 pt-2">
-        <Badge variant="outline">Restricted</Badge>
-        <h3 className="text-base font-semibold">Lineage details are hidden</h3>
-        <p className="text-sm leading-6 text-muted-foreground">
-          Your Databricks identity cannot view this lineage run. No asset names, columns, types, or counts are exposed.
-        </p>
+      <div>
+        <InspectorHeading badge="Restricted" title="Lineage details are hidden" onClose={onClose} />
+        <div className="p-6">
+          <p className="text-sm leading-6 text-muted-foreground">
+            Your Databricks identity cannot view this lineage run. No asset names, columns, types, or counts are
+            exposed.
+          </p>
+        </div>
       </div>
     );
   }
 
-  if (edge !== undefined) return <EdgeDetails edge={edge} onSelect={onSelect} />;
+  if (edge !== undefined) return <EdgeDetails edge={edge} onSelect={onSelect} onClose={onClose} />;
   if (impact !== undefined) {
     return (
-      <div className="space-y-5 pt-2">
-        <div>
-          <Badge variant={impact.relation === 'direct' && isVerifiedBreak(impact) ? 'destructive' : 'outline'}>
-            {impact.relation === 'transitive'
+      <div>
+        <InspectorHeading
+          badge={
+            impact.relation === 'transitive'
               ? 'Transitive impact'
               : isVerifiedBreak(impact)
                 ? 'Direct break'
-                : 'Supporting context'}
-          </Badge>
-          <h3 className="mt-3 break-all font-mono text-sm font-semibold">{targetLabel(impact)}</h3>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">{reasonText(impact)}</p>
+                : 'Supporting context'
+          }
+          destructive={impact.relation === 'direct' && isVerifiedBreak(impact)}
+          title={targetLabel(impact)}
+          subtitle={impact.targetAsset}
+          onClose={onClose}
+        />
+        <div className="space-y-5 p-6">
+          <p className="text-sm leading-6">{reasonText(impact)}</p>
+          <Separator />
+          <dl className="space-y-2 text-sm">
+            <Detail label="Operation" value={operationLabel(impact.operation)} />
+            <Detail label="Referenced column" value={impact.targetColumn ?? 'Table-level consumer'} mono />
+            <Detail label="Impact" value={impact.relation === 'direct' ? 'Direct' : 'Transitive'} />
+            <Detail
+              label="Evidence"
+              value={impact.evidenceLevel === 'definition' ? 'Parsed definition' : 'Verified lineage'}
+            />
+          </dl>
+          <Remediation impact={impact} />
+          <DatasetSample asset={impact.targetAsset} column={impact.targetColumn} kind="impacted" />
+          <SourceEvidence assessment={assessment} selectedId={impact.id} source={source} setSource={setSource} />
         </div>
-        <Separator />
-        <dl className="space-y-3 text-sm">
-          <Detail label="Operation" value={operationLabel(impact.operation)} />
-          <Detail label="Referenced column" value={impact.targetColumn ?? 'Table-level consumer'} mono />
-          <Detail label="Impact" value={impact.relation === 'direct' ? 'Direct' : 'Transitive'} />
-          <Detail
-            label="Evidence"
-            value={impact.evidenceLevel === 'definition' ? 'Parsed definition' : 'Verified lineage'}
-          />
-        </dl>
-        <Remediation impact={impact} />
-        <DatasetSample asset={impact.targetAsset} column={impact.targetColumn} kind="impacted" />
-        <SourceEvidence assessment={assessment} selectedId={impact.id} source={source} setSource={setSource} />
       </div>
     );
   }
 
   if (change !== undefined) {
     return (
-      <div className="space-y-5 pt-2">
-        <div>
-          <Badge className="border-warning/50 bg-warning/10 text-warning-foreground" variant="outline">
-            Proposed change
-          </Badge>
-          <h3 className="mt-3 break-all font-mono text-sm font-semibold">{`${change.asset}.${change.column}`}</h3>
+      <div>
+        <InspectorHeading
+          badge="Proposed change"
+          title={change.column}
+          subtitle={change.asset}
+          warning
+          onClose={onClose}
+        />
+        <div className="space-y-5 p-6">
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             The output contract changes from {change.beforeType} to {change.afterType}.
           </p>
+          <Separator />
+          <dl className="space-y-2 text-sm">
+            <Detail label="Before" value={change.beforeType} />
+            <Detail label="After" value={change.afterType} />
+            <Detail label="Change kind" value={change.changeKind} />
+          </dl>
+          <div className="border-l-2 border-foreground pl-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recommended fix</p>
+            <p className="mt-1 text-sm leading-6">{assessment.recommendedAction}</p>
+          </div>
+          <DatasetSample asset={change.asset} column={change.column} kind="changed" />
+          <SourceEvidence assessment={assessment} selectedId={change.id} source={source} setSource={setSource} />
         </div>
-        <Separator />
-        <dl className="space-y-3 text-sm">
-          <Detail label="Before" value={change.beforeType} />
-          <Detail label="After" value={change.afterType} />
-          <Detail label="Change kind" value={change.changeKind} />
-        </dl>
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recommended fix</p>
-          <p className="mt-1 text-sm leading-6">{assessment.recommendedAction}</p>
-        </div>
-        <DatasetSample asset={change.asset} column={change.column} kind="changed" />
-        <SourceEvidence assessment={assessment} selectedId={change.id} source={source} setSource={setSource} />
       </div>
     );
   }
 
   return (
-    <Alert>
-      <AlertCircle aria-hidden="true" />
-      <AlertTitle>Evidence is unavailable</AlertTitle>
-      <AlertDescription>Select another graph element.</AlertDescription>
-    </Alert>
+    <div className="p-6">
+      <Alert>
+        <AlertCircle aria-hidden="true" />
+        <AlertTitle>Evidence is unavailable</AlertTitle>
+        <AlertDescription>Select another graph element.</AlertDescription>
+      </Alert>
+    </div>
   );
 }
 
-function EdgeDetails({ edge, onSelect }: { edge: AssessmentGraphEdge; onSelect: (id: string) => void }) {
+function InspectorHeading({
+  badge,
+  destructive = false,
+  warning = false,
+  title,
+  subtitle,
+  onClose,
+}: {
+  badge: string;
+  destructive?: boolean;
+  warning?: boolean;
+  title: string;
+  subtitle?: string;
+  onClose: () => void;
+}) {
+  return (
+    <div className="relative border-b border-border p-6 pr-12">
+      <Badge
+        variant={destructive ? 'destructive' : 'outline'}
+        className={warning ? 'border-warning/50 bg-warning/10 text-warning' : undefined}
+      >
+        {badge}
+      </Badge>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className="absolute right-4 top-4 hidden lg:inline-flex"
+        aria-label="Close impact evidence"
+        onClick={onClose}
+      >
+        <X aria-hidden="true" />
+      </Button>
+      <h3 className="mt-3 break-all font-mono text-sm font-semibold">{title}</h3>
+      {subtitle === undefined ? null : (
+        <p className="mt-1 truncate text-xs leading-5 text-muted-foreground" title={subtitle}>
+          {subtitle}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function EdgeDetails({
+  edge,
+  onSelect,
+  onClose,
+}: {
+  edge: AssessmentGraphEdge;
+  onSelect: (id: string) => void;
+  onClose: () => void;
+}) {
   const authorizedMapping = edge.sourceAsset !== null && edge.targetAsset !== null;
   return (
-    <div className="space-y-5 pt-2">
-      <div>
-        <Badge variant="outline">Lineage evidence</Badge>
-        <h3 className="mt-3 text-base font-semibold">Verified dependency</h3>
+    <div>
+      <InspectorHeading badge="Lineage evidence" title="Verified dependency" onClose={onClose} />
+      <div className="space-y-5 p-6">
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           This relationship grounds the causal path between the selected change and downstream impact.
         </p>
-      </div>
-      <Separator />
-      <dl className="space-y-3 text-sm">
-        {authorizedMapping ? (
-          <>
-            <Detail
-              label="Source mapping"
-              value={`${edge.sourceAsset}${edge.sourceColumn === null ? '' : `.${edge.sourceColumn}`}`}
-              mono
-            />
-            <Detail
-              label="Target mapping"
-              value={`${edge.targetAsset}${edge.targetColumn === null ? '' : `.${edge.targetColumn}`}`}
-              mono
-            />
-          </>
+        <Separator />
+        <dl className="space-y-2 text-sm">
+          {authorizedMapping ? (
+            <>
+              <Detail
+                label="Source mapping"
+                value={`${edge.sourceAsset}${edge.sourceColumn === null ? '' : `.${edge.sourceColumn}`}`}
+                mono
+              />
+              <Detail
+                label="Target mapping"
+                value={`${edge.targetAsset}${edge.targetColumn === null ? '' : `.${edge.targetColumn}`}`}
+                mono
+              />
+            </>
+          ) : null}
+          <Detail label="Origin" value={formatOrigin(edge.origin)} />
+          <Detail
+            label="Specificity"
+            value={edge.evidenceLevel === 'table' ? 'Table only — less specific' : edge.evidenceLevel}
+          />
+          <Detail
+            label="Last observed"
+            value={edge.lastObservedAt === null ? 'Not observed; proposed code' : formatDateTime(edge.lastObservedAt)}
+          />
+        </dl>
+        {authorizedMapping && edge.target.startsWith('impact-') ? (
+          <Button type="button" variant="outline" size="sm" onClick={() => onSelect(edge.target)}>
+            Open downstream sample
+          </Button>
         ) : null}
-        <Detail label="Origin" value={formatOrigin(edge.origin)} />
-        <Detail
-          label="Specificity"
-          value={edge.evidenceLevel === 'table' ? 'Table only — less specific' : edge.evidenceLevel}
-        />
-        <Detail
-          label="Last observed"
-          value={edge.lastObservedAt === null ? 'Not observed; proposed code' : formatDateTime(edge.lastObservedAt)}
-        />
-      </dl>
-      {authorizedMapping && edge.target.startsWith('impact-') ? (
-        <Button type="button" variant="outline" size="sm" onClick={() => onSelect(edge.target)}>
-          Open downstream sample
-        </Button>
-      ) : null}
+      </div>
     </div>
   );
 }
@@ -352,7 +429,7 @@ function Remediation({ impact }: { impact: AssessmentImpact }) {
     reassess: 'Resolve the evidence limitation and re-run the assessment before merging.',
   };
   return (
-    <div>
+    <div className="border-l-2 border-foreground pl-4">
       <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recommended fix</p>
       <p className="mt-1 text-sm leading-6">{messages[impact.remediation]}</p>
     </div>
@@ -361,9 +438,9 @@ function Remediation({ impact }: { impact: AssessmentImpact }) {
 
 function Detail({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div>
+    <div className="grid grid-cols-[8rem_minmax(0,1fr)] gap-3">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className={`mt-1 break-words font-medium ${mono ? 'font-mono text-xs' : ''}`}>{value}</dd>
+      <dd className={`break-words font-medium ${mono ? 'font-mono text-xs' : ''}`}>{value}</dd>
     </div>
   );
 }

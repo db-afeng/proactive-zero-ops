@@ -17,15 +17,18 @@ import {
 import { Focus, LocateFixed } from 'lucide-react';
 import { useMemo } from 'react';
 
-import type { AssessmentGraphEdge, AssessmentGraphNode } from '@/lib/contracts';
+import type { AssessmentChange, AssessmentGraphEdge, AssessmentGraphNode, AssessmentImpact } from '@/lib/contracts';
+
+import { operationLabel } from './impact-copy';
 
 import '@xyflow/react/dist/style.css';
 
-const NODE_WIDTH = 224;
-const NODE_HEIGHT = 88;
+const NODE_WIDTH = 280;
+const NODE_HEIGHT = 72;
 
 interface GraphNodeData extends Record<string, unknown> {
   graphNode: AssessmentGraphNode;
+  detail: string;
 }
 
 interface GraphEdgeData extends Record<string, unknown> {
@@ -38,19 +41,23 @@ type FlowEdge = Edge<GraphEdgeData, 'evidence'>;
 export function ImpactGraph({
   nodes,
   edges,
+  impacts,
+  changes,
   selectedId,
   onSelect,
 }: {
   nodes: AssessmentGraphNode[];
   edges: AssessmentGraphEdge[];
+  impacts: AssessmentImpact[];
+  changes: AssessmentChange[];
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
-  const layout = useMemo(() => layoutGraph(nodes, edges), [nodes, edges]);
+  const layout = useMemo(() => layoutGraph(nodes, edges, impacts, changes), [nodes, edges, impacts, changes]);
   return (
     <ReactFlowProvider>
       <div
-        className="relative h-[32rem] overflow-hidden border border-border bg-background"
+        className="impact-graph-canvas relative h-[23rem] overflow-hidden rounded-sm border border-border bg-background"
         aria-label="Impact lineage graph"
       >
         <ReactFlow<FlowNode, FlowEdge>
@@ -61,7 +68,7 @@ export function ImpactGraph({
           onNodeClick={(_event, node) => onSelect(node.id)}
           onEdgeClick={(_event, edge) => onSelect(edge.id)}
           fitView
-          fitViewOptions={{ padding: 0.18, maxZoom: 1.05 }}
+          fitViewOptions={{ padding: 0.12, maxZoom: 1.05 }}
           minZoom={0.35}
           maxZoom={1.5}
           nodesDraggable={false}
@@ -72,10 +79,9 @@ export function ImpactGraph({
         >
           <GraphControls changedNodeId={nodes.find((node) => node.role === 'changed')?.id} />
         </ReactFlow>
-        <div className="pointer-events-none absolute bottom-3 left-3 flex flex-wrap gap-x-4 gap-y-2 bg-background/90 px-2 py-1.5 text-xs text-muted-foreground">
+        <div className="pointer-events-none absolute bottom-2 left-2 flex flex-wrap gap-x-4 gap-y-1.5 bg-background/90 px-2 py-1.5 text-xs text-muted-foreground">
           <LegendLine label="Observed lineage" />
           <LegendLine label="Proposed-code lineage" dashed />
-          <span>Table-only evidence is labelled in the inspector.</span>
         </div>
       </div>
     </ReactFlowProvider>
@@ -85,7 +91,7 @@ export function ImpactGraph({
 function GraphControls({ changedNodeId }: { changedNodeId?: string }) {
   const flow = useReactFlow<FlowNode, FlowEdge>();
   return (
-    <div className="absolute right-3 top-3 z-10">
+    <div className="absolute right-2 top-2 z-10">
       <ButtonGroup aria-label="Graph view controls">
         <Tooltip>
           <TooltipTrigger asChild>
@@ -139,23 +145,32 @@ function ImpactNode({ data, selected }: NodeProps<FlowNode>) {
     restricted: 'Restricted lineage',
   }[node.role];
   const roleClass = {
-    changed: 'border-warning bg-warning/10',
-    direct_break: 'border-destructive bg-destructive/10',
+    changed: 'border-warning bg-warning/15',
+    direct_break: 'border-destructive/50 bg-destructive/10',
     transitive_impact: 'border-destructive/60 bg-background',
     context: 'border-border bg-muted/30',
     restricted: 'border-dashed border-border bg-muted/30',
   }[node.role];
+  const roleLabelClass = {
+    changed: 'text-warning',
+    direct_break: 'text-destructive',
+    transitive_impact: 'text-destructive',
+    context: 'text-muted-foreground',
+    restricted: 'text-muted-foreground',
+  }[node.role];
   return (
     <div
-      className={`h-[88px] w-56 border px-3 py-2 text-left shadow-none ${roleClass} ${selected ? 'ring-2 ring-ring ring-offset-2 ring-offset-background' : ''}`}
+      className={`h-[72px] w-[280px] rounded-sm border px-3 py-2 text-left shadow-none ${roleClass} ${selected ? 'impact-node-selected' : ''}`}
       aria-label={`${roleLabel}: ${node.label}`}
     >
       <Handle type="target" position={Position.Left} className="!size-2 !border-background !bg-muted-foreground" />
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{roleLabel}</p>
-      <p className="mt-1 truncate font-mono text-sm font-medium" title={node.label}>
+      <p className={`text-xs font-semibold uppercase tracking-wide ${roleLabelClass}`}>{roleLabel}</p>
+      <p className="mt-0.5 truncate font-mono text-sm font-medium leading-5" title={node.label}>
         {node.label}
       </p>
-      {node.role !== 'restricted' ? <p className="mt-1 text-xs text-muted-foreground">Select for evidence</p> : null}
+      <p className="truncate text-xs leading-4 text-muted-foreground" title={data.detail}>
+        {data.detail}
+      </p>
       <Handle type="source" position={Position.Right} className="!size-2 !border-background !bg-muted-foreground" />
     </div>
   );
@@ -199,24 +214,33 @@ function LegendLine({ label, dashed = false }: { label: string; dashed?: boolean
 
 function layoutGraph(
   nodes: AssessmentGraphNode[],
-  edges: AssessmentGraphEdge[]
+  edges: AssessmentGraphEdge[],
+  impacts: AssessmentImpact[],
+  changes: AssessmentChange[]
 ): { nodes: FlowNode[]; edges: FlowEdge[] } {
   const graph = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
-  graph.setGraph({ rankdir: 'LR', ranksep: 88, nodesep: 36, marginx: 32, marginy: 48 });
+  graph.setGraph({ rankdir: 'LR', ranksep: 112, nodesep: 18, marginx: 32, marginy: 36 });
   for (const node of nodes) graph.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
-  for (const edge of edges) graph.setEdge(edge.source, edge.target);
+  for (const edge of [...edges].reverse()) graph.setEdge(edge.source, edge.target);
   dagre.layout(graph);
   return {
     nodes: nodes.map((node) => {
       const position = graph.node(node.id) as { x: number; y: number } | undefined;
+      const restrictedTarget =
+        node.role === 'restricted' ? edges.find((edge) => edge.source === node.id)?.target : undefined;
+      const restrictedTargetPosition =
+        restrictedTarget === undefined ? undefined : (graph.node(restrictedTarget) as { y: number } | undefined);
       return {
         id: node.id,
         type: 'impact',
         position: {
           x: (position?.x ?? 0) - NODE_WIDTH / 2,
-          y: (position?.y ?? 0) - NODE_HEIGHT / 2,
+          y:
+            node.role === 'restricted' && restrictedTargetPosition !== undefined
+              ? restrictedTargetPosition.y - NODE_HEIGHT / 2 - 92
+              : (position?.y ?? 0) - NODE_HEIGHT / 2,
         },
-        data: { graphNode: node },
+        data: { graphNode: node, detail: nodeDetail(node, impacts, changes) },
         ariaLabel: `${node.role.replaceAll('_', ' ')}: ${node.label}`,
       };
     }),
@@ -231,4 +255,20 @@ function layoutGraph(
       ariaLabel: `${edge.origin.replaceAll('_', ' ')} ${edge.evidenceLevel} evidence`,
     })),
   };
+}
+
+function nodeDetail(node: AssessmentGraphNode, impacts: AssessmentImpact[], changes: AssessmentChange[]): string {
+  if (node.role === 'restricted') return 'Hidden from your identity';
+  if (node.changeId !== undefined) {
+    const change = changes.find((candidate) => candidate.id === node.changeId);
+    return change === undefined ? 'Proposed contract update' : `${change.beforeType} → ${change.afterType}`;
+  }
+  if (node.impactId !== undefined) {
+    const impact = impacts.find((candidate) => candidate.id === node.impactId);
+    if (impact !== undefined) {
+      const evidence = impact.evidenceLevel === 'definition' ? 'definition evidence' : 'lineage evidence';
+      return `${operationLabel(impact.operation)} · ${evidence}`;
+    }
+  }
+  return node.role === 'context' ? 'Non-blocking lineage context' : 'Verified downstream impact';
 }

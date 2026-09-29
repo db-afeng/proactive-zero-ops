@@ -10,15 +10,7 @@ import {
   TabsList,
   TabsTrigger,
 } from '@databricks/appkit-ui/react';
-import {
-  AlertCircle,
-  CheckCircle2,
-  CircleAlert,
-  ExternalLink,
-  GitPullRequestArrow,
-  OctagonX,
-  RotateCw,
-} from 'lucide-react';
+import { AlertCircle, CheckCircle2, CircleAlert, ExternalLink, OctagonX, RotateCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router';
 
@@ -53,7 +45,7 @@ const STATUS_PRESENTATION: Record<
   warn: {
     label: 'WARN',
     icon: CircleAlert,
-    className: 'border-warning/50 bg-warning/15 text-warning-foreground',
+    className: 'border-warning/50 bg-warning/15 text-warning',
   },
   block: {
     label: 'BLOCK',
@@ -143,12 +135,16 @@ function AssessmentWorkbench({ assessment }: { assessment: AssessmentViewV3 }) {
   }
 
   return (
-    <Tabs value={activeTab} onValueChange={changeTab} className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-20 border-b border-border bg-background">
-        <div className="mx-auto max-w-[88rem] px-4 pt-3 md:px-6">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 pb-3">
+    <Tabs
+      value={activeTab}
+      onValueChange={changeTab}
+      className="flex min-h-screen flex-col gap-0 bg-background text-foreground lg:h-screen lg:min-h-0 lg:overflow-hidden"
+    >
+      <header className="z-20 shrink-0 border-b border-border bg-background">
+        <div className="px-4 pt-2 md:px-6">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 pb-1.5">
             <div className="flex min-w-0 items-center gap-2">
-              <GitPullRequestArrow className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <img src="/favicon.svg" alt="" className="size-4 shrink-0" />
               <p className="truncate text-sm font-semibold">Lineage Impact Studio</p>
             </div>
             <span className="hidden text-muted-foreground sm:inline" aria-hidden="true">
@@ -164,7 +160,7 @@ function AssessmentWorkbench({ assessment }: { assessment: AssessmentViewV3 }) {
               <span className="shrink-0">#{assessment.pullRequest.number}</span>
               <ExternalLink className="size-3.5 shrink-0" aria-hidden="true" />
             </a>
-            <Badge variant="outline" className={`gap-1 rounded-sm ${status.className}`}>
+            <Badge variant="outline" className={`gap-1 rounded-sm px-2 ${status.className}`}>
               <StatusIcon className="size-3" aria-hidden="true" />
               {status.label}
             </Badge>
@@ -178,33 +174,37 @@ function AssessmentWorkbench({ assessment }: { assessment: AssessmentViewV3 }) {
               Reference {assessment.reference}
             </p>
           </div>
-          <TabsList aria-label="Assessment workbench" className="h-9 bg-transparent p-0">
-            <TabsTrigger value="assessment" className="rounded-sm px-3">
+          <TabsList aria-label="Assessment workbench" className="h-9 gap-1 rounded-none bg-transparent p-0">
+            <TabsTrigger value="assessment" className="workbench-tab h-9 px-3">
               Assessment
             </TabsTrigger>
-            <TabsTrigger value="fix" className="rounded-sm px-3">
+            <TabsTrigger value="fix" className="workbench-tab h-9 px-3">
               Fix
             </TabsTrigger>
-            <TabsTrigger value="audit" className="rounded-sm px-3">
+            <TabsTrigger value="audit" className="workbench-tab h-9 px-3">
               Audit
             </TabsTrigger>
           </TabsList>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[88rem] px-4 py-5 md:px-6 md:py-7">
-        <TabsContent value="assessment" className="mt-0 focus-visible:outline-none">
+      <main className="min-h-0 flex-1 lg:overflow-hidden">
+        <TabsContent value="assessment" className="mt-0 h-full focus-visible:outline-none">
           <AssessmentTab assessment={assessment} />
         </TabsContent>
-        <TabsContent value="fix" className="mt-0 focus-visible:outline-none">
-          <FixTab assessment={assessment} active={activeTab === 'fix'} />
+        <TabsContent value="fix" className="mt-0 h-full overflow-y-auto focus-visible:outline-none">
+          <div className="mx-auto w-full max-w-[88rem] px-4 py-5 md:px-6 md:py-7">
+            <FixTab assessment={assessment} active={activeTab === 'fix'} />
+          </div>
         </TabsContent>
-        <TabsContent value="audit" className="mt-0 focus-visible:outline-none">
-          <AuditTab
-            reference={assessment.reference}
-            repository={assessment.pullRequest.repository}
-            active={activeTab === 'audit'}
-          />
+        <TabsContent value="audit" className="mt-0 h-full overflow-y-auto focus-visible:outline-none">
+          <div className="mx-auto w-full max-w-[88rem] px-4 py-5 md:px-6 md:py-7">
+            <AuditTab
+              reference={assessment.reference}
+              repository={assessment.pullRequest.repository}
+              active={activeTab === 'audit'}
+            />
+          </div>
         </TabsContent>
       </main>
     </Tabs>

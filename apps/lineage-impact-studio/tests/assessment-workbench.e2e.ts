@@ -244,7 +244,7 @@ test('synchronizes graph filters, impact selection, and GitHub-gated source evid
 
   await page.getByRole('button', { name: /Inspect direct impact on .*effective_ead/ }).click();
   await expect(
-    page.getByText('numeric arithmetic still expects the previous type contract.', { exact: true }).first()
+    page.getByText('Numeric arithmetic still expects the previous type contract.', { exact: true }).first()
   ).toBeVisible();
   await expect(page.getByText('Parsed definition', { exact: true })).toBeVisible();
 
@@ -336,7 +336,17 @@ test('matches the PR #4 desktop and mobile visual baselines', async ({ page }) =
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/assessments/${REFERENCE}`);
   await expect(page.getByRole('heading', { name: 'Causal impact map' })).toBeVisible();
+  await page.getByRole('button', { name: /Inspect direct impact on .*effective_ead/ }).click();
+  await expect(page.getByRole('heading', { name: 'Current dataset sample' })).toBeVisible();
   await expect(page).toHaveScreenshot('pr4-assessment-desktop.png', { animations: 'disabled' });
+
+  await page.getByRole('button', { name: 'Authorize exact source evidence' }).click();
+  await expect(page.getByText('outstanding_balance + accrued_interest', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Switch to dark mode' }).click();
+  await expect(page).toHaveScreenshot('pr4-assessment-desktop-dark.png', { animations: 'disabled' });
+
+  await page.getByRole('button', { name: 'Switch to light mode' }).click();
+  await page.getByRole('button', { name: 'Close impact evidence' }).click();
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole('heading', { name: 'Impact list' })).toBeVisible();
