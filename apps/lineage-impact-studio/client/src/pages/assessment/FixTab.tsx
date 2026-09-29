@@ -35,6 +35,7 @@ import {
   ShieldAlert,
   XCircle,
 } from 'lucide-react';
+import { useTheme } from 'next-themes';
 import { useEffect, useRef, useState } from 'react';
 
 import { MonacoDiff } from '@/components/MonacoDiff';
@@ -893,18 +894,8 @@ function useFixStream(sessionId: string | undefined, shouldStream: boolean, onSe
 }
 
 function useMonacoTheme() {
-  const [theme, setTheme] = useState(() =>
-    window.matchMedia('(prefers-color-scheme: dark)').matches ? 'vs-dark' : 'light'
-  );
-
-  useEffect(() => {
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const update = () => setTheme(media.matches ? 'vs-dark' : 'light');
-    media.addEventListener('change', update);
-    return () => media.removeEventListener('change', update);
-  }, []);
-
-  return theme;
+  const { resolvedTheme } = useTheme();
+  return resolvedTheme === 'dark' ? 'vs-dark' : 'light';
 }
 
 function startRequirement(

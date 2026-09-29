@@ -24,6 +24,7 @@ import { useParams } from 'react-router';
 
 import { ApiRequestError, getAssessment } from '@/lib/api';
 import type { AssessmentStatus, AssessmentViewV2 } from '@/lib/contracts';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 import { AssessmentTab } from './AssessmentTab';
 import { AuditTab } from './AuditTab';
@@ -167,9 +168,12 @@ function AssessmentWorkbench({ assessment }: { assessment: AssessmentViewV2 }) {
               <StatusIcon className="size-3" aria-hidden="true" />
               {status.label}
             </Badge>
-            <p className="ml-auto hidden max-w-80 truncate font-mono text-xs text-muted-foreground lg:block">
-              Reference {assessment.reference}
-            </p>
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              <p className="hidden max-w-80 truncate font-mono text-xs text-muted-foreground lg:block">
+                Reference {assessment.reference}
+              </p>
+              <ThemeToggle />
+            </div>
             <p className="w-full break-all font-mono text-xs text-muted-foreground lg:hidden">
               Reference {assessment.reference}
             </p>

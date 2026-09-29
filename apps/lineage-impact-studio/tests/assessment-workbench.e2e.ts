@@ -293,6 +293,22 @@ test('uses semantic dark-theme colors and disables decorative motion', async ({ 
   expect(background).not.toBe('rgb(255, 255, 255)');
 });
 
+test('toggles and persists the selected color theme', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto(`/assessments/${REFERENCE}`);
+
+  const darkModeButton = page.getByRole('button', { name: 'Switch to dark mode' });
+  await expect(darkModeButton).toBeVisible();
+  await darkModeButton.click();
+  await expect(page.locator('html')).toHaveClass(/dark/);
+  await expect(page.getByRole('button', { name: 'Switch to light mode' })).toBeVisible();
+
+  await page.reload();
+  await expect(page.locator('html')).toHaveClass(/dark/);
+  await page.getByRole('button', { name: 'Switch to light mode' }).click();
+  await expect(page.locator('html')).toHaveClass(/light/);
+});
+
 test('reviews a validated patch and blocks a commit when the PR head becomes stale', async ({ page }) => {
   let createBody: unknown;
   let approvalBody: unknown;
