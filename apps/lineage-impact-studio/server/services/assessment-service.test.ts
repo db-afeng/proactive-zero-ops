@@ -177,6 +177,20 @@ describe('AssessmentService', () => {
     );
   });
 
+  it('builds the automatic fix context from the immutable envelope without user-scoped SQL', async () => {
+    const studio = service();
+    const actorSubject = `github-check:${reference}`;
+    const view = await studio.getAutomationView({ reference, actorSubject });
+
+    expect(view.viewer).toEqual({ subject: actorSubject, displayName: 'GitHub check automation' });
+    expect(view.disclosure.state).toBe('full');
+    expect(view.changes).toHaveLength(1);
+    expect(view.impacts).toHaveLength(1);
+    const source = await studio.getSourceEvidence({ reference, authorizedView: view });
+    expect(source.changes[0]?.beforeExpression).toBe('secret before SQL');
+    expect(source.impacts[0]?.targetExpression).toBe('secret target SQL');
+  });
+
   it('uses the same generic unavailable response for missing, expired, and no-access references', async () => {
     const missing = new AssessmentService({
       reader: { read: vi.fn().mockRejectedValue(new Error('missing')) },

@@ -291,7 +291,11 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
       try {
         requireOboRequest(request);
         const body = StartAutomaticFixBodySchema.parse(request.body);
-        const view = await reauthorizeAssessment(assessmentService, appkit, request, request.params.reference);
+        const actorSubject = automationActor(request.params.reference);
+        const view = await assessmentService.getAutomationView({
+          reference: request.params.reference,
+          actorSubject,
+        });
         if (view.detailState !== 'available') throw new DetailedEvidenceUnavailableError();
         if (!isFailedAssessmentStatus(view.status)) {
           response.status(409).json({ code: 'FIX_NOT_REQUIRED', message: 'This assessment did not fail the check.' });
@@ -308,7 +312,6 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           sendUnavailable(response, FIX_UNAVAILABLE_REASON);
           return;
         }
-        const actorSubject = automationActor(view.reference);
         const existing = await repository.getLatestOmnigentSession({
           actorSubject,
           assessmentReference: view.reference,
@@ -366,7 +369,10 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           response.status(404).json({ code: 'FIX_SESSION_NOT_FOUND', message: 'Fix session was not found.' });
           return;
         }
-        const view = await reauthorizeAssessment(assessmentService, appkit, request, owned.session.assessmentReference);
+        const view = await assessmentService.getAutomationView({
+          reference: owned.session.assessmentReference,
+          actorSubject: owned.actorSubject,
+        });
         let session = owned.session;
         if (fixService !== null && !isTerminalFixSession(session)) {
           session = await fixService.synchronize({
