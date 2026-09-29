@@ -97,6 +97,48 @@ export class AssessmentService {
     }
   }
 
+  async getAutomationView(options: { reference: unknown; actorSubject: string }): Promise<AssessmentViewV3> {
+    const { reference, envelope } = await this.#load(options.reference);
+    try {
+      const freshness = assessmentFreshness(envelope.created_at, this.#now());
+      if (freshness === 'expired') throw new AssessmentUnavailableError();
+      const projection = projectRestrictedEvidence(envelope);
+      const access = new Map(
+        projection.uniqueAssets.map(
+          (asset) => [asset.reference, { authorized: true, assetType: asset.assetType }] as const
+        )
+      );
+
+      return createAssessmentViewV3({
+        reference,
+        projection,
+        source: {
+          provider: 'github',
+          createdAt: envelope.created_at,
+          freshness,
+        },
+        pullRequest: {
+          repository: envelope.source.repository,
+          number: envelope.source.pull_request_number,
+          baseSha: envelope.source.base_sha,
+          headSha: envelope.source.head_sha,
+        },
+        viewer: {
+          subject: options.actorSubject,
+          displayName: 'GitHub check automation',
+        },
+        access,
+      });
+    } catch (error) {
+      if (error instanceof AssessmentUnavailableError) throw error;
+      console.warn(
+        '[lineage-impact-studio] Automation assessment unavailable after envelope load',
+        safeErrorType(error)
+      );
+      throw new AssessmentUnavailableError();
+    }
+  }
+
   async getSourceEvidence(options: {
     reference: unknown;
     authorizedView: AssessmentViewV3;
