@@ -1,6 +1,8 @@
 import dagre from '@dagrejs/dagre';
 import { Button, ButtonGroup, Tooltip, TooltipContent, TooltipTrigger } from '@databricks/appkit-ui/react';
 import {
+  Background,
+  BackgroundVariant,
   BaseEdge,
   Handle,
   MarkerType,
@@ -77,6 +79,14 @@ export function ImpactGraph({
           elevateEdgesOnSelect
           proOptions={{ hideAttribution: true }}
         >
+          <Background
+            id="impact-grid"
+            variant={BackgroundVariant.Dots}
+            gap={16}
+            size={1}
+            color="var(--muted-foreground)"
+            style={{ opacity: 0.25 }}
+          />
           <GraphControls changedNodeId={nodes.find((node) => node.role === 'changed')?.id} />
         </ReactFlow>
         <div className="pointer-events-none absolute bottom-2 left-2 flex flex-wrap gap-x-4 gap-y-1.5 bg-background/90 px-2 py-1.5 text-xs text-muted-foreground">
@@ -145,11 +155,11 @@ function ImpactNode({ data, selected }: NodeProps<FlowNode>) {
     restricted: 'Restricted lineage',
   }[node.role];
   const roleClass = {
-    changed: 'border-warning bg-warning/15',
-    direct_break: 'border-destructive/50 bg-destructive/10',
-    transitive_impact: 'border-destructive/60 bg-background',
-    context: 'border-border bg-muted/30',
-    restricted: 'border-dashed border-border bg-muted/30',
+    changed: 'impact-node-changed border-warning',
+    direct_break: 'impact-node-direct-break border-destructive/50',
+    transitive_impact: 'impact-node-transitive border-destructive/60',
+    context: 'impact-node-context border-border',
+    restricted: 'impact-node-context border-dashed border-border',
   }[node.role];
   const roleLabelClass = {
     changed: 'text-warning',

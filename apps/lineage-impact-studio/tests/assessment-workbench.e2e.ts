@@ -249,13 +249,56 @@ test('synchronizes graph filters, impact selection, and GitHub-gated source evid
   await expect(page.getByText('Parsed definition', { exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: 'Authorize exact source evidence' }).click();
-  await expect(page.getByText('outstanding_balance + accrued_interest', { exact: true })).toBeVisible();
+  const sourceSql = page.getByLabel('Downstream expression SQL');
+  await expect(sourceSql).toBeVisible();
+  await expect(sourceSql).toHaveAttribute('data-language', 'spark-sql');
+  await expect(sourceSql).toContainText('CASE');
+  await expect(sourceSql.locator('.sql-token-keyword')).not.toHaveCount(0);
 
   await page.getByRole('combobox', { name: 'Impact scope' }).click();
   await page.getByRole('option', { name: 'Direct breaks only' }).click();
   await expect(page.getByText('portfolio_expected_loss', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Fit impact graph to view' }).click();
   await page.getByRole('button', { name: 'Centre graph on changed column' }).click();
+});
+
+test('moves the dot field with the DAG and keeps node surfaces opaque', async ({ page }) => {
+  await page.goto(`/assessments/${REFERENCE}`);
+
+  const graph = page.getByLabel('Impact lineage graph');
+  const pattern = graph.locator('.react-flow__background pattern');
+  await expect(pattern).toHaveCount(1);
+  const before = await pattern.getAttribute('patternTransform');
+  await page.getByRole('button', { name: 'Centre graph on changed column' }).click();
+  await expect.poll(() => pattern.getAttribute('patternTransform')).not.toBe(before);
+
+  const directNode = graph.locator('.impact-node-direct-break').filter({ hasText: 'loan_exposure.effective_ead' });
+  await expect(directNode).toHaveClass(/impact-node-direct-break/);
+  const nodeBackground = await directNode.evaluate((element) => getComputedStyle(element).backgroundColor);
+  expect(nodeBackground).not.toBe('rgba(0, 0, 0, 0)');
+  expect(nodeBackground).not.toBe('transparent');
+});
+
+test('uses scroll fades while keeping desktop vertical scrollbars unobtrusive', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 720 });
+  await page.goto(`/assessments/${REFERENCE}`);
+
+  const assessmentScroll = page.getByTestId('assessment-scroll-region');
+  await expect(assessmentScroll).toHaveAttribute('data-scroll-after', 'true');
+  await expect(assessmentScroll).toHaveAttribute('data-scrolling', 'false');
+  await assessmentScroll.evaluate((element) => {
+    element.scrollTop = 80;
+  });
+  await expect(assessmentScroll).toHaveAttribute('data-scrolling', 'true');
+  await expect(assessmentScroll).toHaveAttribute('data-scroll-before', 'true');
+
+  await page.getByRole('button', { name: /Inspect direct impact on .*effective_ead/ }).click();
+  const inspectorScroll = page.getByTestId('impact-inspector-scroll-region');
+  await expect(inspectorScroll).toHaveAttribute('data-scroll-after', 'true');
+  await inspectorScroll.evaluate((element) => {
+    element.scrollTop = 80;
+  });
+  await expect(inspectorScroll).toHaveAttribute('data-scrolling', 'true');
 });
 
 test('runs the OBO sample only after selection and highlights the impacted column', async ({ page }) => {
@@ -341,7 +384,14 @@ test('matches the PR #4 desktop and mobile visual baselines', async ({ page }) =
   await expect(page).toHaveScreenshot('pr4-assessment-desktop.png', { animations: 'disabled' });
 
   await page.getByRole('button', { name: 'Authorize exact source evidence' }).click();
-  await expect(page.getByText('outstanding_balance + accrued_interest', { exact: true })).toBeVisible();
+  const sourceSql = page.getByLabel('Downstream expression SQL');
+  await expect(sourceSql).toContainText('CASE');
+  const inspectorScroll = page.getByTestId('impact-inspector-scroll-region');
+  await inspectorScroll.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect(inspectorScroll).toHaveAttribute('data-scroll-after', 'false');
+  await expect(inspectorScroll).toHaveAttribute('data-scrolling', 'false');
   await page.getByRole('button', { name: 'Switch to dark mode' }).click();
   await expect(page).toHaveScreenshot('pr4-assessment-desktop-dark.png', { animations: 'disabled' });
 
@@ -582,7 +632,11 @@ async function mockAssessmentApis(page: Page) {
       ],
       impacts: [
         { id: 'impact-1', targetExpression: 'outstanding_balance >= 0' },
-        { id: 'impact-2', targetExpression: 'outstanding_balance + accrued_interest' },
+        {
+          id: 'impact-2',
+          targetExpression:
+            "CAST(a.outstanding_balance + a.undrawn_commitment * CASE WHEN a.product_type = 'Revolver' THEN 0.7500 WHEN a.product_type = 'Trade Finance' THEN 0.5000 ELSE 0.0000 END AS DECIMAL(18, 2))",
+        },
         { id: 'impact-3', targetExpression: 'outstanding_balance / credit_limit' },
         { id: 'impact-4', targetExpression: null },
       ],
