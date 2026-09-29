@@ -3,7 +3,11 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { Application, Request, Response } from 'express';
 import { z } from 'zod';
 
-import { serializeAssessmentViewV3, serializeSourceEvidenceView } from '../domain/assessment-view';
+import {
+  serializeAssessmentViewV3,
+  serializeSourceEvidenceView,
+  type AssessmentViewV3,
+} from '../domain/assessment-view';
 import { CommitShaSchema, parseAssessmentReference } from '../domain/identifiers';
 import { GitHubAppClient } from '../integrations/github';
 import { GitHubIntegrationError } from '../integrations/github/errors';
@@ -33,7 +37,7 @@ const OAUTH_RETURN_COOKIE = 'lineage_impact_oauth_return';
 const FIX_UNAVAILABLE_REASON = 'Fix generation could not authenticate to Omnigent from this app runtime.';
 const AUTOMATION_ACTOR_PREFIX = 'github-check:';
 const AUTOMATIC_FIX_GUIDANCE =
-  'Propose the smallest safe source change that resolves the blocking downstream impact while preserving existing contracts.';
+  'Propose the smallest safe source change that resolves the failed downstream-impact check while preserving existing contracts.';
 
 const StartFixBodySchema = z
   .object({
@@ -289,8 +293,8 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
         const body = StartAutomaticFixBodySchema.parse(request.body);
         const view = await reauthorizeAssessment(assessmentService, appkit, request, request.params.reference);
         if (view.detailState !== 'available') throw new DetailedEvidenceUnavailableError();
-        if (view.status !== 'block') {
-          response.status(409).json({ code: 'FIX_NOT_REQUIRED', message: 'This assessment is not blocking.' });
+        if (!isFailedAssessmentStatus(view.status)) {
+          response.status(409).json({ code: 'FIX_NOT_REQUIRED', message: 'This assessment did not fail the check.' });
           return;
         }
         if (body.expectedHeadSha !== view.pullRequest.headSha) {
@@ -733,6 +737,10 @@ function commitIdempotencyKey(sessionId: string, patchDigest: string): string {
 
 function automationActor(assessmentReference: string): string {
   return `${AUTOMATION_ACTOR_PREFIX}${parseAssessmentReference(assessmentReference)}`;
+}
+
+export function isFailedAssessmentStatus(status: AssessmentViewV3['status']): boolean {
+  return status === 'block' || status === 'error';
 }
 
 function isAutomationActor(actorSubject: string): boolean {
