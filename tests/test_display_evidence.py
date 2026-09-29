@@ -75,8 +75,14 @@ def fixture_result() -> GuardResult:
                 target_table=SILVER,
                 target_column="effective_ead",
                 level="column",
+                event_time="2026-09-24 06:58:44.261",
             ),
-            LineageEdge(source_table=SILVER, target_table=GOLD, level="table"),
+            LineageEdge(
+                source_table=SILVER,
+                target_table=GOLD,
+                level="table",
+                event_time="2026-09-24T06:58:47.203+00:00",
+            ),
             LineageEdge(
                 source_table="proactive_zero_ops_catalog.proactive_zero_ops_bronze.payment_events",
                 target_table="proactive_zero_ops_catalog.proactive_zero_ops_silver.delinquency_features",
@@ -123,6 +129,9 @@ def test_display_graph_only_contains_causal_edges() -> None:
     pairs = {(edge.source_asset, edge.target_asset) for edge in evidence.edges}
     assert (SOURCE, SILVER) in pairs
     assert (SILVER, GOLD) in pairs
+    observed_at = {edge.last_observed_at for edge in evidence.edges}
+    assert "2026-09-24T06:58:44.261000Z" in observed_at
+    assert "2026-09-24T06:58:47.203000Z" in observed_at
     assert all("payment_events" not in source for source, _target in pairs)
     assert all("delinquency_features" not in target for _source, target in pairs)
     assert all("borrower" not in source for source, _target in pairs)

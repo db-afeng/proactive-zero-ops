@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -314,7 +315,13 @@ def _collect_edges(edges: list[LineageEdge], impacts: list[DisplayImpact]) -> li
         source_columns = sorted({edge.source_column for edge in selected if edge.source_column})
         target_columns = sorted({edge.target_column for edge in selected if edge.target_column})
         origins = sorted({edge.origin.value for edge in selected}) or ["proposed_code"]
-        observed = sorted({edge.event_time for edge in selected if edge.event_time})
+        observed = sorted(
+            {
+                normalized
+                for edge in selected
+                if (normalized := _normalize_observed_at(edge.event_time)) is not None
+            }
+        )
         result.append(
             DisplayEdge(
                 id=f"edge-{len(result) + 1}",
@@ -328,6 +335,27 @@ def _collect_edges(edges: list[LineageEdge], impacts: list[DisplayImpact]) -> li
             )
         )
     return result
+
+
+def _normalize_observed_at(value: str | None) -> str | None:
+    """Normalize Unity Catalog timestamp strings to explicit UTC ISO-8601."""
+
+    if value is None:
+        return None
+    candidate = value.strip().replace(" ", "T", 1)
+    if not candidate:
+        return None
+    if candidate.endswith("Z"):
+        candidate = f"{candidate[:-1]}+00:00"
+    try:
+        observed_at = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=UTC)
+    else:
+        observed_at = observed_at.astimezone(UTC)
+    return observed_at.isoformat().replace("+00:00", "Z")
 
 
 def _messages(
