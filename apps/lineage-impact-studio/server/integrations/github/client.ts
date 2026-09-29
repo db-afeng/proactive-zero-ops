@@ -324,7 +324,7 @@ export class GitHubAppClient {
     }
     if (pull.data.state !== 'open') throw new GitHubIntegrationError('pull_request_closed');
     if (pull.data.head.sha !== expectedHeadSha) throw new GitHubIntegrationError('head_changed');
-    if (repository.data.permissions?.push !== true) {
+    if (repository.data.permissions?.push !== true && !isInstallationAccessToken(input.accessToken)) {
       throw new GitHubIntegrationError('write_not_permitted');
     }
     const headRef = validateBranchName(pull.data.head.ref);
@@ -1113,6 +1113,11 @@ function validateAccessToken(value: string): void {
   if (typeof value !== 'string' || value.length < 1 || value.length > 4096 || hasTokenSeparator(value)) {
     throw new GitHubIntegrationError('unauthorized');
   }
+}
+
+/** GitHub App installation tokens rely on their issued repository permissions. */
+function isInstallationAccessToken(value: string): boolean {
+  return value.startsWith('ghs_');
 }
 
 function sameRepository(left: string, right: string): boolean {

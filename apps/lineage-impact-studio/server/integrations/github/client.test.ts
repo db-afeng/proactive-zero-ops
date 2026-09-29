@@ -164,6 +164,36 @@ describe('GitHub App OAuth', () => {
 });
 
 describe('pull-request commit gate', () => {
+  it('accepts a GitHub Actions installation token without a user-style push permission field', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(pullResponse()))
+      .mockResolvedValueOnce(jsonResponse({ full_name: PINNED_GITHUB_REPOSITORY }));
+
+    await expect(
+      client(fetchMock).getValidatedPullRequest({
+        accessToken: `ghs_${'a'.repeat(36)}`,
+        pullRequestNumber: 4,
+        expectedHeadSha: HEAD_SHA,
+      })
+    ).resolves.toMatchObject({ canPush: true, headSha: HEAD_SHA });
+  });
+
+  it('still rejects a user token without repository push permission', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(pullResponse()))
+      .mockResolvedValueOnce(jsonResponse(repositoryResponse(false, true)));
+
+    await expect(
+      client(fetchMock).getValidatedPullRequest({
+        accessToken: TOKEN,
+        pullRequestNumber: 4,
+        expectedHeadSha: HEAD_SHA,
+      })
+    ).rejects.toMatchObject({ code: 'write_not_permitted' });
+  });
+
   it('binds changed paths to exact blobs at the assessed head', async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
