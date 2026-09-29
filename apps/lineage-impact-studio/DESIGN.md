@@ -34,7 +34,8 @@ SHAs.
 Authorized graph edges carry source/target asset and column mappings. Any edge
 touching restricted lineage has all four mapping fields cleared. Selecting an
 authorized changed or impacted node runs a five-row, unordered OBO sample of
-current deployed data; warning and destructive column badges distinguish the
+current deployed data; every sample header shows the exact deployed SQL type,
+and warning and destructive column badges distinguish the
 changed and downstream impacted columns. Samples are never described as
 proposed pull-request output and disappear immediately when the OBO read fails.
 

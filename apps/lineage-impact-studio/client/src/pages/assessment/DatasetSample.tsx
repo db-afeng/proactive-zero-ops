@@ -73,7 +73,13 @@ export function DatasetSample({ asset, column, kind }: { asset: string; column: 
         </Empty>
       ) : null}
       {!loading && error === null && parsed.kind === 'ready' && parsed.rows.length > 0 ? (
-        <SampleTable rows={parsed.rows} columns={parsed.columns} highlightedColumn={column} kind={kind} />
+        <SampleTable
+          rows={parsed.rows}
+          columns={parsed.columns}
+          columnTypes={parsed.columnTypes}
+          highlightedColumn={column}
+          kind={kind}
+        />
       ) : null}
     </section>
   );
@@ -82,11 +88,13 @@ export function DatasetSample({ asset, column, kind }: { asset: string; column: 
 function SampleTable({
   rows,
   columns,
+  columnTypes,
   highlightedColumn,
   kind,
 }: {
   rows: SampleRow[];
   columns: string[];
+  columnTypes: Record<string, string>;
   highlightedColumn: string | null;
   kind: SampleKind;
 }) {
@@ -107,16 +115,21 @@ function SampleTable({
                 const highlighted = column === matchedColumn;
                 return (
                   <TableHead key={column} className={highlighted ? highlightClass(kind) : undefined}>
-                    <span className="inline-flex items-center gap-2 whitespace-nowrap">
-                      {column}
-                      {highlighted ? (
-                        <Badge
-                          variant={kind === 'impacted' ? 'destructive' : 'outline'}
-                          className={kind === 'changed' ? 'border-warning/50 text-warning-foreground' : undefined}
-                        >
-                          {kind === 'changed' ? 'Changed' : 'Impacted'}
-                        </Badge>
-                      ) : null}
+                    <span className="flex flex-col items-start gap-1 whitespace-nowrap py-1">
+                      <span className="inline-flex items-center gap-2">
+                        {column}
+                        {highlighted ? (
+                          <Badge
+                            variant={kind === 'impacted' ? 'destructive' : 'outline'}
+                            className={kind === 'changed' ? 'border-warning/50 text-warning-foreground' : undefined}
+                          >
+                            {kind === 'changed' ? 'Changed' : 'Impacted'}
+                          </Badge>
+                        ) : null}
+                      </span>
+                      <span className="font-mono text-[11px] font-normal text-muted-foreground">
+                        {columnTypes[column]}
+                      </span>
                     </span>
                   </TableHead>
                 );

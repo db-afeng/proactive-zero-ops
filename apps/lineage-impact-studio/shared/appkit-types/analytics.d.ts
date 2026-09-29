@@ -24,6 +24,8 @@ declare module '@databricks/appkit-ui/react' {
       result: Array<{
         /** @sqlType STRING */
         row_json: string;
+        /** @sqlType STRING */
+        row_type: string;
       }>;
     };
   }

@@ -125,6 +125,8 @@ Run from this directory with the selected profile:
 npm test
 npm run typecheck
 npm run lint
+npm run lint:ast-grep
+npm run format
 npm run build
 npm run typegen
 npm --prefix tests ci
@@ -138,6 +140,21 @@ Also require the Playwright graph, accessibility, visual-regression,
 narrow/desktop layout, source-evidence, and stale commit flows to pass. The
 manual Impeccable review is documented in `DESIGN.md`; Impeccable is not a
 runtime dependency.
+
+Every deployed app change also requires a production smoke test in the Codex
+embedded browser before it can be merged to `main`. For dataset samples, select
+both a changed node and an impacted node and confirm that:
+
+- the sample is not requested before node selection;
+- every visible header includes its exact deployed SQL type;
+- the affected header and cells retain the Changed or Impacted badge and
+  semantic highlight;
+- five current rows render when available, and denied access exposes no sample
+  values; and
+- query history contains no `information_schema` scan.
+
+The Playwright sample test is the automated regression gate for header types;
+the embedded-browser check confirms the real deployed query contract and UI.
 
 Configuration validation succeeded on 2026-09-28. Full Apps validation reached
 type checking and was not green at that point, so it is not a deployment

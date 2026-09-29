@@ -271,7 +271,8 @@ test('runs the OBO sample only after selection and highlights the impacted colum
 
   await page.getByRole('button', { name: /Inspect direct impact on .*effective_ead/ }).click();
   await expect(page.getByRole('heading', { name: 'Current dataset sample' })).toBeVisible();
-  await expect(page.getByRole('cell', { name: /effective_ead Impacted/ })).toBeVisible();
+  await expect(page.getByRole('cell', { name: /effective_ead Impacted decimal\(18,2\)/ })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'account_id string' })).toBeVisible();
   await expect(page.getByText('1250.5', { exact: true })).toBeVisible();
   expect(analyticsRequests).toHaveLength(1);
   expect(analyticsRequests[0]?.url).toContain('dataset_sample');
@@ -583,6 +584,7 @@ async function mockAssessmentApis(page: Page) {
       data: [
         {
           row_json: { account_id: 'A-100', effective_ead: 1250.5, risk_band: 'medium' },
+          row_type: 'struct<account_id:string,effective_ead:decimal(18,2),risk_band:string>',
         },
       ],
     });
