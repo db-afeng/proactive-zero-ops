@@ -4,9 +4,10 @@ import { resolve } from 'node:path';
 
 import type { Application, Request, Response } from 'express';
 
-import { serializeAssessmentViewV1 } from '../domain/assessment-view';
+import { serializeAssessmentViewV2, serializeSourceEvidenceView } from '../domain/assessment-view';
 import { parseAssessmentReference } from '../domain/identifiers';
 import { GitHubAppClient } from '../integrations/github';
+import { GitHubIntegrationError } from '../integrations/github/errors';
 import { LineageImpactRepository, type OmnigentSessionView } from '../persistence/repository';
 import { bootstrapLineageImpactStore, type QueryExecutor } from '../persistence/schema';
 import { Aes256GcmCipher, decodeBase64EncryptionKey } from '../security/encryption';
@@ -16,6 +17,7 @@ import {
   AssessmentPermissionCheckError,
   AssessmentService,
   AssessmentUnavailableError,
+  DetailedEvidenceUnavailableError,
 } from '../services/assessment-service';
 import type { UserAnalyticsExecutor } from '../services/asset-authorization';
 import { VolumeRestrictedEnvelopeReader, type VolumeReader } from '../services/restricted-envelope-reader';
@@ -60,6 +62,8 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
     });
 
     application.get('/api/assessments/:reference', async (request, response) => {
+      const startedAt = Date.now();
+      let metricStatus: SafeRequestStatus = 'failed';
       response.set('Cache-Control', 'private, no-store');
       try {
         const view = await assessmentService.getView({
@@ -67,9 +71,59 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           reference: request.params.reference,
           userAnalytics: appkit.analytics.asUser(request),
         });
-        response.type('application/json').send(serializeAssessmentViewV1(view));
+        response.type('application/json').send(serializeAssessmentViewV2(view));
+        metricStatus = 'succeeded';
       } catch (error) {
+        metricStatus = assessmentMetricStatus(error);
         sendAssessmentError(response, error);
+      } finally {
+        recordSafeRequestMetric('assessment_view', metricStatus, startedAt);
+      }
+    });
+
+    application.get('/api/assessments/:reference/source-evidence', async (request, response) => {
+      const startedAt = Date.now();
+      let metricStatus: SafeRequestStatus = 'failed';
+      response.set('Cache-Control', 'private, no-store');
+      try {
+        const view = await reauthorizeAssessment(assessmentService, appkit, request, request.params.reference);
+        if (view.detailState !== 'available') throw new DetailedEvidenceUnavailableError();
+        const viewer = requireOboRequest(request);
+        if (oauth === null) {
+          response.status(503).json({
+            code: 'SOURCE_EVIDENCE_UNAVAILABLE',
+            message: 'GitHub authorization is not configured for this deployment.',
+          });
+          metricStatus = 'unavailable';
+          return;
+        }
+        const credential = await repository.loadGitHubCredential(viewer.subject);
+        if (credential === null) {
+          response.status(409).json({
+            code: 'GITHUB_DISCONNECTED',
+            message: 'Connect GitHub to view exact source evidence.',
+          });
+          metricStatus = 'denied';
+          return;
+        }
+        await oauth.client.getValidatedSourcePullRequest({
+          accessToken: credential.accessToken,
+          repository: view.pullRequest.repository,
+          pullRequestNumber: view.pullRequest.number,
+          expectedBaseSha: view.pullRequest.baseSha,
+          expectedHeadSha: view.pullRequest.headSha,
+        });
+        const evidence = await assessmentService.getSourceEvidence({
+          reference: request.params.reference,
+          authorizedView: view,
+        });
+        response.type('application/json').send(serializeSourceEvidenceView(evidence));
+        metricStatus = 'succeeded';
+      } catch (error) {
+        metricStatus = sourceMetricStatus(error);
+        sendSourceEvidenceError(response, error);
+      } finally {
+        recordSafeRequestMetric('source_evidence', metricStatus, startedAt);
       }
     });
 
@@ -280,6 +334,41 @@ function sendAssessmentError(response: Response, error: unknown): void {
   sendRouteError(response, error);
 }
 
+function sendSourceEvidenceError(response: Response, error: unknown): void {
+  if (error instanceof DetailedEvidenceUnavailableError) {
+    response.status(409).json({ code: 'DETAILED_EVIDENCE_UNAVAILABLE', message: error.message });
+    return;
+  }
+  if (error instanceof GitHubIntegrationError) {
+    if (error.code === 'pull_request_closed' || error.code === 'base_changed' || error.code === 'head_changed') {
+      response.status(409).json({
+        code: 'STALE_PULL_REQUEST',
+        message: 'The pull request no longer matches this assessment. Re-run the assessment.',
+      });
+      return;
+    }
+    if (
+      error.code === 'unauthorized' ||
+      error.code === 'forbidden' ||
+      error.code === 'not_found' ||
+      error.code === 'read_not_permitted' ||
+      error.code === 'repository_mismatch'
+    ) {
+      response.status(403).json({
+        code: 'GITHUB_READ_REQUIRED',
+        message: 'Your connected GitHub identity cannot read this assessment source.',
+      });
+      return;
+    }
+    response.status(502).json({
+      code: 'GITHUB_VALIDATION_FAILED',
+      message: 'GitHub source authorization could not be verified.',
+    });
+    return;
+  }
+  sendAssessmentError(response, error);
+}
+
 function sendRouteError(response: Response, error: unknown): void {
   if (error instanceof OboAuthorizationError) {
     response.status(401).json({ code: 'OBO_REQUIRED', message: error.message });
@@ -290,6 +379,46 @@ function sendRouteError(response: Response, error: unknown): void {
 
 function sendUnavailable(response: Response, message: string): void {
   response.status(503).json({ code: 'OMNIGENT_UNAVAILABLE', message });
+}
+
+type SafeRequestStatus = 'succeeded' | 'denied' | 'unavailable' | 'stale' | 'failed';
+
+function assessmentMetricStatus(error: unknown): SafeRequestStatus {
+  if (error instanceof AssessmentPermissionCheckError || error instanceof OboAuthorizationError) return 'denied';
+  if (error instanceof AssessmentUnavailableError) return 'unavailable';
+  return 'failed';
+}
+
+function sourceMetricStatus(error: unknown): SafeRequestStatus {
+  if (error instanceof DetailedEvidenceUnavailableError) return 'unavailable';
+  if (error instanceof GitHubIntegrationError) {
+    if (error.code === 'pull_request_closed' || error.code === 'base_changed' || error.code === 'head_changed') {
+      return 'stale';
+    }
+    if (
+      error.code === 'unauthorized' ||
+      error.code === 'forbidden' ||
+      error.code === 'not_found' ||
+      error.code === 'read_not_permitted' ||
+      error.code === 'repository_mismatch'
+    ) {
+      return 'denied';
+    }
+  }
+  return assessmentMetricStatus(error);
+}
+
+/** Never add references, asset names, SQL, paths, or lineage identifiers here. */
+function recordSafeRequestMetric(
+  route: 'assessment_view' | 'source_evidence',
+  status: SafeRequestStatus,
+  startedAt: number
+) {
+  console.info('[lineage-impact-studio] request metric', {
+    route,
+    status,
+    latencyMs: Math.max(0, Date.now() - startedAt),
+  });
 }
 
 function singleQueryValue(value: unknown): string | null {

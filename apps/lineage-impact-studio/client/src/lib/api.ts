@@ -1,10 +1,11 @@
 import type {
-  AssessmentViewV1,
+  AssessmentViewV2,
   AuditResponse,
   Capabilities,
   CommitOutcome,
   FixSession,
   GitHubConnection,
+  SourceEvidenceView,
   ValidatedPatch,
 } from './contracts';
 
@@ -25,16 +26,38 @@ export class ApiRequestError extends Error {
   }
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    credentials: 'same-origin',
-    headers: {
-      Accept: 'application/json',
-      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-      ...init?.headers,
-    },
-  });
+async function requestJson<T>(path: string, init?: RequestInit, timeoutMs?: number): Promise<T> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort(init?.signal?.reason);
+  if (init?.signal?.aborted === true) controller.abort(init.signal.reason);
+  else init?.signal?.addEventListener('abort', abortFromCaller, { once: true });
+  const timeout =
+    timeoutMs === undefined
+      ? undefined
+      : window.setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, timeoutMs);
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...init,
+      signal: controller.signal,
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json',
+        ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+        ...init?.headers,
+      },
+    });
+  } catch (error) {
+    if (timedOut) throw new ApiRequestError(408, 'The assessment request timed out.', 'REQUEST_TIMEOUT');
+    throw error;
+  } finally {
+    if (timeout !== undefined) window.clearTimeout(timeout);
+    init?.signal?.removeEventListener('abort', abortFromCaller);
+  }
 
   const raw = await response.text();
   let payload: unknown;
@@ -63,10 +86,22 @@ function unwrapSession(value: FixSession | { session: FixSession }): FixSession 
 }
 
 export function getAssessment(reference: string, signal?: AbortSignal) {
-  return requestJson<AssessmentViewV1>(`/api/assessments/${encodeURIComponent(reference)}`, {
-    cache: 'no-store',
-    signal,
-  });
+  return requestJson<AssessmentViewV2>(
+    `/api/assessments/${encodeURIComponent(reference)}`,
+    {
+      cache: 'no-store',
+      signal,
+    },
+    90_000
+  );
+}
+
+export function getSourceEvidence(reference: string, signal?: AbortSignal) {
+  return requestJson<SourceEvidenceView>(
+    `/api/assessments/${encodeURIComponent(reference)}/source-evidence`,
+    { cache: 'no-store', signal },
+    30_000
+  );
 }
 
 export function getCapabilities(signal?: AbortSignal): Promise<Capabilities> {

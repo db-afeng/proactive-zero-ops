@@ -32,7 +32,7 @@ from typing import Any, Literal
 from urllib.parse import quote, urlsplit, urlunsplit
 
 PUBLIC_SCHEMA_VERSION = 1
-RESTRICTED_SCHEMA_VERSION = 2
+RESTRICTED_SCHEMA_VERSION = 3
 PUBLIC_MARKER = "<!-- proactive-zero-ops-lineage-guard -->"
 
 # This is enforcement policy in trusted base-branch code.  It is intentionally

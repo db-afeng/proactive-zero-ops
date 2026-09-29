@@ -6,14 +6,21 @@ const HEAD_SHA = 'f1e2d3c4b5a697887766554433221100ffeeddcc';
 const PATCH_DIGEST = 'sha256:996a18d9270f53766792eb17edcf73d5540fe9dc56820cb5de161e1151c71dc8';
 
 const assessment = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   reference: REFERENCE,
+  detailState: 'available',
   status: 'block',
+  severity: 'high',
   message: 'A potentially breaking downstream impact was identified.',
+  headline: 'outstanding_balance is now text, but loan_exposure still performs numeric arithmetic.',
+  recommendedAction:
+    'Keep the source column numeric and add currency formatting in a separate presentation column or layer.',
+  rawModelProse: 'Never render arbitrary model analysis.',
   source: {
     provider: 'github',
     createdAt: '2026-09-28T09:32:00+10:00',
     freshness: 'current',
+    evidenceOrigin: 'mixed',
   },
   pullRequest: {
     repository: 'db-afeng/proactive-zero-ops',
@@ -25,65 +32,204 @@ const assessment = {
     subject: 'user:workspace-viewer',
     displayName: 'Workspace Viewer',
   },
-  lineagePaths: [
+  confidence: {
+    interpretation: 0.95,
+    discovery: 'complete',
+  },
+  changes: [
     {
-      segments: [
+      id: 'change-1',
+      asset: 'proactive_zero_ops_catalog.proactive_zero_ops_bronze.loan_accounts',
+      column: 'outstanding_balance',
+      changeKind: 'modified',
+      beforeType: 'numeric',
+      afterType: 'text',
+    },
+  ],
+  impacts: [
+    {
+      id: 'impact-1',
+      changeId: 'change-1',
+      relation: 'direct',
+      targetAsset: 'proactive_zero_ops_catalog.proactive_zero_ops_bronze.loan_accounts',
+      targetColumn: 'non_negative_balance',
+      operation: 'constraint',
+      reason: 'incompatible_type',
+      evidenceLevel: 'definition',
+      path: [
         {
           kind: 'asset',
-          reference: 'production.analytics.orders',
+          reference: 'proactive_zero_ops_catalog.proactive_zero_ops_bronze.loan_accounts',
           assetType: 'table',
-        },
-        {
-          kind: 'restricted',
-          // Deliberately hostile extra data verifies the client never renders restricted fields.
-          reference: 'secret.hidden.customer_pii',
-          assetType: 'table',
-          count: 47,
-        },
-        {
-          kind: 'asset',
-          reference: 'production.reporting.executive_revenue',
-          assetType: 'materialized_view',
         },
       ],
+      remediation: 'restore_contract',
     },
     {
-      segments: [
+      id: 'impact-2',
+      changeId: 'change-1',
+      relation: 'direct',
+      targetAsset: 'proactive_zero_ops_catalog.proactive_zero_ops_silver.loan_exposure',
+      targetColumn: 'effective_ead',
+      operation: 'arithmetic',
+      reason: 'incompatible_type',
+      evidenceLevel: 'definition',
+      path: [
         {
           kind: 'asset',
-          reference: 'production.analytics.orders',
+          reference: 'proactive_zero_ops_catalog.proactive_zero_ops_bronze.loan_accounts',
           assetType: 'table',
         },
         {
           kind: 'asset',
-          reference: 'production.ml.customer_features',
+          reference: 'proactive_zero_ops_catalog.proactive_zero_ops_silver.loan_exposure',
           assetType: 'view',
         },
       ],
+      remediation: 'restore_contract',
+    },
+    {
+      id: 'impact-3',
+      changeId: 'change-1',
+      relation: 'direct',
+      targetAsset: 'proactive_zero_ops_catalog.proactive_zero_ops_silver.loan_exposure',
+      targetColumn: 'utilization_ratio',
+      operation: 'arithmetic',
+      reason: 'incompatible_type',
+      evidenceLevel: 'definition',
+      path: [
+        {
+          kind: 'asset',
+          reference: 'proactive_zero_ops_catalog.proactive_zero_ops_bronze.loan_accounts',
+          assetType: 'table',
+        },
+        {
+          kind: 'asset',
+          reference: 'proactive_zero_ops_catalog.proactive_zero_ops_silver.loan_exposure',
+          assetType: 'view',
+        },
+      ],
+      remediation: 'restore_contract',
+    },
+    {
+      id: 'impact-4',
+      changeId: 'change-1',
+      relation: 'transitive',
+      targetAsset: 'proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_loss',
+      targetColumn: null,
+      operation: 'unknown',
+      reason: 'upstream_failure',
+      evidenceLevel: 'lineage',
+      path: [
+        {
+          kind: 'asset',
+          reference: 'proactive_zero_ops_catalog.proactive_zero_ops_bronze.loan_accounts',
+          assetType: 'table',
+        },
+        { kind: 'restricted' },
+        {
+          kind: 'asset',
+          reference: 'proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_loss',
+          assetType: 'materialized_view',
+        },
+      ],
+      remediation: 'restore_contract',
     },
   ],
+  graph: {
+    nodes: [
+      {
+        id: 'change-change-1',
+        role: 'changed',
+        label: 'loan_accounts.outstanding_balance',
+        asset: 'proactive_zero_ops_catalog.proactive_zero_ops_bronze.loan_accounts',
+        assetType: 'table',
+        column: 'outstanding_balance',
+        changeId: 'change-1',
+      },
+      impactNode('impact-1', 'loan_accounts.non_negative_balance', 'direct_break'),
+      impactNode('impact-2', 'loan_exposure.effective_ead', 'direct_break'),
+      impactNode('impact-3', 'loan_exposure.utilization_ratio', 'direct_break'),
+      impactNode('impact-4', 'portfolio_expected_loss', 'transitive_impact'),
+      {
+        id: 'restricted',
+        role: 'restricted',
+        label: 'Restricted lineage',
+        asset: 'secret.hidden.customer_pii',
+        column: 'secret_balance',
+        count: 47,
+      },
+    ],
+    edges: [
+      graphEdge('edge-1', 'change-change-1', 'impact-impact-1', 'proposed_code', 'definition'),
+      graphEdge('edge-2', 'change-change-1', 'impact-impact-2', 'observed_lineage', 'column'),
+      graphEdge('edge-3', 'change-change-1', 'impact-impact-3', 'proposed_code', 'column'),
+      graphEdge('edge-4', 'restricted', 'impact-impact-4', 'observed_lineage', 'table'),
+    ],
+  },
   disclosure: {
     state: 'partial',
     notice: 'Some lineage is hidden because you do not have access.',
   },
 };
 
+function impactNode(id: string, label: string, role: 'direct_break' | 'transitive_impact') {
+  return { id: `impact-${id}`, role, label, impactId: id };
+}
+
+function graphEdge(
+  id: string,
+  source: string,
+  target: string,
+  origin: 'observed_lineage' | 'proposed_code',
+  evidenceLevel: 'column' | 'table' | 'definition'
+) {
+  return { id, source, target, origin, evidenceLevel, lastObservedAt: null };
+}
+
 test.beforeEach(async ({ page }) => {
   await mockAssessmentApis(page);
 });
 
-test('deep links to a partially redacted assessment without leaking hidden data', async ({ page }) => {
+test('explains the PR #4 break and keeps the default graph causal', async ({ page }) => {
   await page.goto(`/assessments/${REFERENCE}`);
 
   await expect(page).toHaveTitle('db-afeng/proactive-zero-ops #4 · Lineage Impact Studio');
-  await expect(page.getByRole('heading', { name: 'Change is blocked for review' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', {
+      name: 'outstanding_balance is now text, but loan_exposure still performs numeric arithmetic.',
+    })
+  ).toBeVisible();
   await expect(page.getByText('Some lineage is restricted', { exact: true })).toBeVisible();
-  await expect(page.getByText('production.analytics.orders', { exact: true }).first()).toBeVisible();
-  await expect(page.getByText('production.reporting.executive_revenue', { exact: true })).toBeVisible();
-  await expect(page.getByText('Restricted segment', { exact: true })).toHaveCount(1);
-  await expect(page.getByText('secret.hidden.customer_pii', { exact: true })).toHaveCount(0);
-  await expect(page.getByText('47', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('loan_exposure.effective_ead', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('loan_exposure.utilization_ratio', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('loan_accounts.non_negative_balance', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('delinquency_features', { exact: false })).toHaveCount(0);
+  await expect(page.getByText('payment_events', { exact: false })).toHaveCount(0);
+  await expect(page.getByText('borrower', { exact: false })).toHaveCount(0);
+  await expect(page.getByText('secret.hidden.customer_pii', { exact: false })).toHaveCount(0);
+  await expect(page.getByText('secret_balance', { exact: false })).toHaveCount(0);
+  await expect(page.getByText('Never render arbitrary model analysis.', { exact: true })).toHaveCount(0);
   await expect(page.getByText(`Reference ${REFERENCE}`, { exact: true }).first()).toBeVisible();
+});
+
+test('synchronizes graph filters, impact selection, and GitHub-gated source evidence', async ({ page }) => {
+  await page.goto(`/assessments/${REFERENCE}`);
+
+  await page.getByRole('button', { name: /Inspect direct impact on .*effective_ead/ }).click();
+  await expect(
+    page.getByText('numeric arithmetic still expects the previous type contract.', { exact: true }).first()
+  ).toBeVisible();
+  await expect(page.getByText('Parsed definition', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Authorize exact source evidence' }).click();
+  await expect(page.getByText('outstanding_balance + accrued_interest', { exact: true })).toBeVisible();
+
+  await page.getByRole('combobox', { name: 'Impact scope' }).click();
+  await page.getByRole('option', { name: 'Direct breaks only' }).click();
+  await expect(page.getByText('portfolio_expected_loss', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Fit impact graph to view' }).click();
+  await page.getByRole('button', { name: 'Centre graph on changed column' }).click();
 });
 
 test('supports keyboard navigation across the persistent workbench tabs', async ({ page }) => {
@@ -107,28 +253,44 @@ test('keeps the assessment usable without horizontal page overflow at desktop an
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/assessments/${REFERENCE}`);
 
-  const lineageHeading = page.getByRole('heading', { name: 'Accessible lineage' });
-  const contextHeading = page.getByRole('heading', { name: 'Review context' });
-  await expect(lineageHeading).toBeVisible();
-  const desktopLineage = await lineageHeading.boundingBox();
-  const desktopContext = await contextHeading.boundingBox();
-  expect(desktopLineage).not.toBeNull();
-  expect(desktopContext).not.toBeNull();
-  expect(desktopContext?.x).toBeGreaterThan(desktopLineage?.x ?? 0);
+  const graphHeading = page.getByRole('heading', { name: 'Causal impact map' });
+  await expect(graphHeading).toBeVisible();
+  await expect(page.getByLabel('Impact lineage graph')).toBeVisible();
 
   await page.setViewportSize({ width: 390, height: 844 });
-  const narrowLineage = await lineageHeading.boundingBox();
-  const narrowContext = await contextHeading.boundingBox();
-  expect(narrowLineage).not.toBeNull();
-  expect(narrowContext).not.toBeNull();
-  expect(narrowContext?.y).toBeGreaterThan(narrowLineage?.y ?? 0);
+  await expect(page.getByLabel('Impact lineage graph')).toBeHidden();
+  await expect(page.getByRole('heading', { name: 'Impact list' })).toBeVisible();
+  await page.getByRole('button', { name: /Inspect direct impact on .*effective_ead/ }).click();
+  await expect(page.getByRole('dialog', { name: 'Impact evidence' })).toBeVisible();
 
   const viewport = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,
   }));
   expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
-  await expect(page.getByText(`Reference ${REFERENCE}`, { exact: true }).last()).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Review context' }).click();
+  await expect(page.getByText(REFERENCE, { exact: true }).last()).toBeVisible();
+});
+
+test('matches the PR #4 desktop and mobile visual baselines', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/assessments/${REFERENCE}`);
+  await expect(page.getByRole('heading', { name: 'Causal impact map' })).toBeVisible();
+  await expect(page).toHaveScreenshot('pr4-assessment-desktop.png', { animations: 'disabled' });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole('heading', { name: 'Impact list' })).toBeVisible();
+  await expect(page).toHaveScreenshot('pr4-assessment-mobile.png', { animations: 'disabled' });
+});
+
+test('uses semantic dark-theme colors and disables decorative motion', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+  await page.goto(`/assessments/${REFERENCE}`);
+  await expect(page.getByLabel('Impact lineage graph')).toBeVisible();
+  await expect(page.locator('.react-flow__edge.animated')).toHaveCount(0);
+  const background = await page.locator('body').evaluate((element) => getComputedStyle(element).backgroundColor);
+  expect(background).not.toBe('rgb(255, 255, 255)');
 });
 
 test('reviews a validated patch and blocks a commit when the PR head becomes stale', async ({ page }) => {
@@ -225,6 +387,82 @@ for (const status of [403, 404]) {
   });
 }
 
+test('shows a safe rerun-required state for a legacy assessment', async ({ page }) => {
+  await page.unroute('**/api/assessments/*');
+  await page.route(`**/api/assessments/${REFERENCE}`, async (route) => {
+    await fulfillJson(route, {
+      ...assessment,
+      detailState: 'legacy',
+      severity: 'none',
+      headline: 'Detailed explanation is unavailable for this assessment.',
+      recommendedAction: 'Re-run the assessment to generate verified change and lineage evidence.',
+      source: { ...assessment.source, evidenceOrigin: 'unavailable' },
+      confidence: { interpretation: null, discovery: 'unknown' },
+      changes: [],
+      impacts: [],
+      graph: { nodes: [], edges: [] },
+      disclosure: { state: 'full', notice: 'All referenced lineage assets are visible to you.' },
+    });
+  });
+  await page.goto(`/assessments/${REFERENCE}`);
+  await expect(page.getByText('Re-run the assessment to generate verified change and lineage evidence.')).toBeVisible();
+  await expect(page.getByLabel('Impact lineage graph')).toHaveCount(0);
+  await expect(page.getByText('raw model prose')).toHaveCount(0);
+});
+
+test('shows stale and empty evidence states without inventing impacts', async ({ page }) => {
+  await page.unroute('**/api/assessments/*');
+  await page.route(`**/api/assessments/${REFERENCE}`, async (route) => {
+    await fulfillJson(route, {
+      ...assessment,
+      status: 'pass',
+      severity: 'none',
+      headline: 'No blocking downstream impact was identified.',
+      recommendedAction: 'Re-run the assessment if downstream definitions changed.',
+      source: { ...assessment.source, freshness: 'stale', evidenceOrigin: 'unavailable' },
+      changes: [],
+      impacts: [],
+      graph: { nodes: [], edges: [] },
+      disclosure: { state: 'full', notice: 'All referenced lineage assets are visible to you.' },
+    });
+  });
+  await page.goto(`/assessments/${REFERENCE}`);
+  await expect(page.getByText('Assessment is stale', { exact: true })).toBeVisible();
+  await expect(page.getByText('No verified causal graph is available', { exact: true })).toBeVisible();
+});
+
+test('progresses slow loading to an actionable timeout', async ({ page }) => {
+  await page.unroute('**/api/assessments/*');
+  await page.clock.install();
+  await page.route('**/api/assessments/*', () => {
+    // Deliberately leave the request pending so the browser-side timeout owns the state transition.
+  });
+  await page.goto(`/assessments/${REFERENCE}`, { waitUntil: 'domcontentloaded' });
+  await page.clock.fastForward(10_001);
+  await expect(
+    page.getByText('Checking workspace permissions and assessment evidence…', { exact: true })
+  ).toBeVisible();
+  await page.clock.fastForward(80_000);
+  await expect(page.getByText('Assessment could not be loaded', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
+});
+
+test('explains when GitHub must be connected before exact expressions are shown', async ({ page }) => {
+  await page.unroute(`**/api/assessments/${REFERENCE}/source-evidence`);
+  await page.route(`**/api/assessments/${REFERENCE}/source-evidence`, async (route) => {
+    await fulfillJson(
+      route,
+      { code: 'GITHUB_DISCONNECTED', message: 'Connect GitHub to view exact source evidence.' },
+      409
+    );
+  });
+  await page.goto(`/assessments/${REFERENCE}`);
+  await page.getByRole('button', { name: /Inspect direct impact on .*effective_ead/ }).click();
+  await page.getByRole('button', { name: 'Authorize exact source evidence' }).click();
+  await expect(page.getByText('Source evidence is locked', { exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Connect GitHub' })).toBeVisible();
+});
+
 async function mockAssessmentApis(page: Page) {
   await page.route('**/api/assessments/*', async (route) => {
     if (route.request().method() !== 'GET') {
@@ -241,6 +479,29 @@ async function mockAssessmentApis(page: Page) {
   });
   await page.route('**/api/audit/*', async (route) => {
     await fulfillJson(route, { records: [] });
+  });
+  await page.route(`**/api/assessments/${REFERENCE}/source-evidence`, async (route) => {
+    await fulfillJson(route, {
+      schemaVersion: 1,
+      assessmentReference: REFERENCE,
+      pullRequestFilesUrl: 'https://github.com/db-afeng/proactive-zero-ops/pull/4/files',
+      changes: [
+        {
+          id: 'change-1',
+          filePath: 'src/credit_risk/transformations/bronze/loan_accounts.sql',
+          diffUrl:
+            'https://github.com/db-afeng/proactive-zero-ops/pull/4/files#diff-239abbbd3d957241319bc0767fd298474525eed408198882ea49d7da55dc868c',
+          beforeExpression: 'CAST(outstanding_balance_raw AS DECIMAL(18, 2))',
+          afterExpression: "CONCAT('AUD ', FORMAT_NUMBER(outstanding_balance_raw, 2))",
+        },
+      ],
+      impacts: [
+        { id: 'impact-1', targetExpression: 'outstanding_balance >= 0' },
+        { id: 'impact-2', targetExpression: 'outstanding_balance + accrued_interest' },
+        { id: 'impact-3', targetExpression: 'outstanding_balance / credit_limit' },
+        { id: 'impact-4', targetExpression: null },
+      ],
+    });
   });
 }
 

@@ -60,6 +60,15 @@ export interface ValidatedPullRequest {
   isFork: false;
 }
 
+export interface ValidatedSourcePullRequest {
+  number: number;
+  repository: typeof PINNED_GITHUB_REPOSITORY;
+  state: 'open';
+  baseSha: string;
+  headSha: string;
+  canRead: true;
+}
+
 export interface ExpectedFileVersion {
   path: string;
   expectedBlobSha: string | null;
@@ -104,7 +113,7 @@ const PullRequestResponseSchema = z.object({
 
 const RepositoryResponseSchema = z.object({
   full_name: z.string(),
-  permissions: z.object({ push: z.boolean() }).optional(),
+  permissions: z.object({ pull: z.boolean(), push: z.boolean() }).partial().optional(),
 });
 
 const GitReferenceResponseSchema = z.object({ object: z.object({ sha: CommitShaSchema }) });
@@ -322,6 +331,51 @@ export class GitHubAppClient {
       headRef,
       canPush: true,
       isFork: false,
+    };
+  }
+
+  /** Authorize exact-expression disclosure without requiring repository write access. */
+  async getValidatedSourcePullRequest(input: {
+    accessToken: string;
+    repository: string;
+    pullRequestNumber: number;
+    expectedBaseSha: string;
+    expectedHeadSha: string;
+  }): Promise<ValidatedSourcePullRequest> {
+    validateAccessToken(input.accessToken);
+    if (!sameRepository(input.repository, PINNED_GITHUB_REPOSITORY)) {
+      throw new GitHubIntegrationError('repository_mismatch');
+    }
+    const pullRequestNumberResult = z.number().int().positive().safeParse(input.pullRequestNumber);
+    if (!pullRequestNumberResult.success) throw new GitHubIntegrationError('invalid_request');
+    const expectedBaseSha = parseRequestedCommitSha(input.expectedBaseSha);
+    const expectedHeadSha = parseRequestedCommitSha(input.expectedHeadSha);
+    const [pullResponse, repositoryResponse] = await Promise.all([
+      this.apiJson(`/repos/${PINNED_GITHUB_REPOSITORY}/pulls/${pullRequestNumberResult.data}`, input.accessToken, {
+        method: 'GET',
+      }),
+      this.apiJson(`/repos/${PINNED_GITHUB_REPOSITORY}`, input.accessToken, { method: 'GET' }),
+    ]);
+    const pull = PullRequestResponseSchema.safeParse(pullResponse);
+    const repository = RepositoryResponseSchema.safeParse(repositoryResponse);
+    if (!pull.success || !repository.success) throw new GitHubIntegrationError('invalid_response');
+    if (
+      !sameRepository(pull.data.base.repo.full_name, PINNED_GITHUB_REPOSITORY) ||
+      !sameRepository(repository.data.full_name, PINNED_GITHUB_REPOSITORY)
+    ) {
+      throw new GitHubIntegrationError('repository_mismatch');
+    }
+    if (repository.data.permissions?.pull !== true) throw new GitHubIntegrationError('read_not_permitted');
+    if (pull.data.state !== 'open') throw new GitHubIntegrationError('pull_request_closed');
+    if (pull.data.base.sha !== expectedBaseSha) throw new GitHubIntegrationError('base_changed');
+    if (pull.data.head.sha !== expectedHeadSha) throw new GitHubIntegrationError('head_changed');
+    return {
+      number: pull.data.number,
+      repository: PINNED_GITHUB_REPOSITORY,
+      state: 'open',
+      baseSha: pull.data.base.sha,
+      headSha: pull.data.head.sha,
+      canRead: true,
     };
   }
 

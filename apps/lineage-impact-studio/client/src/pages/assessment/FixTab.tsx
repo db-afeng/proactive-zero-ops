@@ -52,7 +52,7 @@ import {
   githubLoginUrl,
 } from '@/lib/api';
 import type {
-  AssessmentViewV1,
+  AssessmentViewV2,
   Capabilities,
   CommitOutcome,
   FixSession,
@@ -73,7 +73,7 @@ type StreamState = 'idle' | 'connecting' | 'connected' | 'disconnected';
 
 const GUIDANCE_LIMIT = 1200;
 
-export function FixTab({ assessment, active }: { assessment: AssessmentViewV1; active: boolean }) {
+export function FixTab({ assessment, active }: { assessment: AssessmentViewV2; active: boolean }) {
   const [github, setGitHub] = useState<Loadable<GitHubConnection>>({ kind: 'idle' });
   const [capabilities, setCapabilities] = useState<Loadable<Capabilities>>({ kind: 'idle' });
   const [prerequisiteRetry, setPrerequisiteRetry] = useState(0);
@@ -399,7 +399,7 @@ function GitHubConnectionControl({
   onRetry,
 }: {
   state: Loadable<GitHubConnection>;
-  assessment: AssessmentViewV1;
+  assessment: AssessmentViewV2;
   disabled: boolean;
   onDisconnect: () => void;
   onRetry: () => void;
@@ -911,7 +911,7 @@ function startRequirement(
   loading: boolean,
   github: GitHubConnection | undefined,
   omnigent: Capabilities['omnigent'] | undefined,
-  freshness: AssessmentViewV1['source']['freshness'],
+  freshness: AssessmentViewV2['source']['freshness'],
   guidance: string
 ) {
   if (loading) return 'Checking GitHub connection and workspace capabilities.';

@@ -117,7 +117,7 @@ def test_restricted_evidence_is_separate_and_repr_is_redacted() -> None:
     assert restricted.to_authenticated_record()["authentication"] == "required"
     assert restricted.to_authenticated_record()["viewer_authorization"] == "required"
     assert restricted.to_authenticated_record()["assessment_principal"] == "service_principal"
-    assert restricted.to_authenticated_record()["schema_version"] == 2
+    assert restricted.to_authenticated_record()["schema_version"] == 3
     assert restricted.to_authenticated_record()["source"] == {
         "provider": "github",
         "repository": "db-afeng/proactive-zero-ops",

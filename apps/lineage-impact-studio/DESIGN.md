@@ -21,12 +21,33 @@ diff surface that genuinely needs containment.
 - Keep restricted lineage anonymous. A placeholder must not expose asset names,
   counts, types, or the length of a hidden run.
 
+## Evidence-led assessment
+
+The assessment reading order is deliberately: what changed, why it breaks,
+what must be fixed, then review context. `AssessmentViewV2` contains only
+strictly validated change facts, reason codes, fixed remediation kinds, and
+authorized causal graph elements. Exact SQL expressions and repository paths
+are excluded from that response and require a separate GitHub-authorized
+request which revalidates repository read access and the assessed base/head
+SHAs.
+
+The graph has no decorative background or minimap. Proposed-code edges are
+dashed; observed lineage is solid. Only verified breaks use destructive color,
+while the proposed contract change uses warning color. The synchronized list
+is the primary small-screen representation and opens evidence in an AppKit
+sheet. Legacy v2 envelopes show a rerun-required message and never attempt to
+reconstruct facts from model prose.
+
+Loading progresses from a skeleton to explicit workspace/evidence checking at
+10 seconds, then aborts at 90 seconds with a retry. Empty, stale, partial,
+malformed, GitHub-disconnected, and stale-PR states all fail closed with direct
+operational copy.
+
 ## Impeccable Slop fallback review
 
-Reviewed 2026-09-28 using Codex's built-in browser against
-<https://impeccable.style/slop/> after `npx impeccable install` and registry
-lookup were blocked by the configured private npm proxy. Impeccable was not
-added as a runtime dependency.
+Reviewed 2026-09-29 against <https://impeccable.style/slop/> and the
+`critique`, `layout`, `clarify`, and `harden` guidance. Impeccable is not a
+runtime dependency.
 
 The manual source and rendered-page review checked the catalog categories:
 design-system consistency, visual detail, typography, color/contrast,
@@ -34,5 +55,9 @@ layout/space, motion, copy, imagery, and general quality. The implementation
 uses no gradients, glassmorphism, glow, decorative background grid, accent
 stripes, extreme radii, hero metrics, generic feature-card grid, marquee,
 decorative animation, or placeholder imagery. Text below the AppKit `text-xs`
-step was removed. Playwright covers keyboard tabs, narrow-screen stacking,
-horizontal overflow, redaction, deep links, and stale commit handling.
+step was removed. The rendered desktop and 390px pages were reviewed for clear
+reading order, 65–75 character prose widths, task grouping, actionable copy,
+and overflow. Playwright covers graph filtering and controls, graph/list
+selection, source authorization states, keyboard tabs, narrow-screen sheets,
+light/dark semantic colors, reduced motion, redaction, legacy reassessment,
+deep links, stale commit handling, and PR #4 visual baselines.

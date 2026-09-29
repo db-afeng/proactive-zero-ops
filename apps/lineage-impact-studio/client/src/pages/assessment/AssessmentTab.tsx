@@ -2,29 +2,65 @@ import {
   Alert,
   AlertDescription,
   AlertTitle,
+  Badge,
+  Button,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
   Empty,
   EmptyDescription,
   EmptyHeader,
-  EmptyMedia,
   EmptyTitle,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Separator,
 } from '@databricks/appkit-ui/react';
-import { CircleAlert, Database, EyeOff, GitBranch, ShieldCheck } from 'lucide-react';
+import { ChevronDown, CircleAlert, EyeOff, Info, Layers3, RotateCw } from 'lucide-react';
+import { useMemo, useState } from 'react';
 
-import type { AssessmentViewV1, LineageSegment } from '@/lib/contracts';
+import type { AssessmentViewV2 } from '@/lib/contracts';
 
-export function AssessmentTab({ assessment }: { assessment: AssessmentViewV1 }) {
+import { ImpactGraph } from './ImpactGraph';
+import { ImpactInspector } from './ImpactInspector';
+import { ImpactList } from './ImpactList';
+
+type ImpactScope = 'direct' | 'all';
+
+export function AssessmentTab({ assessment }: { assessment: AssessmentViewV2 }) {
+  const [scope, setScope] = useState<ImpactScope>('all');
+  const [showContext, setShowContext] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const visible = useMemo(() => {
+    const nodes = assessment.graph.nodes.filter((node) => {
+      if (scope === 'direct' && node.role === 'transitive_impact') return false;
+      if (!showContext && node.role === 'context') return false;
+      return true;
+    });
+    const nodeIds = new Set(nodes.map((node) => node.id));
+    return {
+      nodes,
+      edges: assessment.graph.edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target)),
+      impacts: assessment.impacts.filter(
+        (impact) => nodeIds.has(`impact-${impact.id}`) && (scope === 'all' || impact.relation === 'direct')
+      ),
+    };
+  }, [assessment, scope, showContext]);
+
+  if (assessment.detailState === 'legacy') return <LegacyAssessment assessment={assessment} />;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {assessment.source.freshness !== 'current' ? (
         <Alert className="border-warning/50">
           <CircleAlert className="text-warning-foreground" aria-hidden="true" />
           <AlertTitle>
             {assessment.source.freshness === 'stale' ? 'Assessment is stale' : 'Freshness could not be confirmed'}
           </AlertTitle>
-          <AlertDescription>
-            Re-run the GitHub assessment before using this impact view to make a change.
-          </AlertDescription>
+          <AlertDescription>Re-run the assessment before relying on this impact decision.</AlertDescription>
         </Alert>
       ) : null}
 
@@ -40,152 +76,211 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV1 }) 
         </Alert>
       ) : null}
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-10">
-        <div className="min-w-0 space-y-8">
-          <section aria-labelledby="assessment-summary-title" className="space-y-3">
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <ShieldCheck className="size-4" aria-hidden="true" />
-              <p className="text-xs font-semibold uppercase tracking-wide">Assessment result</p>
-            </div>
-            <h1 id="assessment-summary-title" className="text-2xl font-semibold tracking-tight">
-              {assessment.status === 'block' ? 'Change is blocked for review' : 'Impact review'}
-            </h1>
-            <p className="max-w-[72ch] text-base leading-7 text-muted-foreground">{assessment.message}</p>
-          </section>
-
-          <Separator />
-
-          <section aria-labelledby="lineage-title" className="space-y-4">
-            <div>
-              <h2 id="lineage-title" className="text-lg font-semibold">
-                Accessible lineage
-              </h2>
-              <p className="mt-1 max-w-[72ch] text-sm leading-6 text-muted-foreground">
-                Ordered paths show only objects your Databricks identity can access. Restricted runs are represented
-                without names, types, or counts.
-              </p>
-            </div>
-
-            {assessment.lineagePaths.length === 0 ? (
-              <Empty className="min-h-48 border border-border">
-                <EmptyHeader>
-                  <EmptyMedia>
-                    <GitBranch className="size-5 text-muted-foreground" aria-hidden="true" />
-                  </EmptyMedia>
-                  <EmptyTitle>No lineage path is available</EmptyTitle>
-                  <EmptyDescription>
-                    The assessment contains no lineage path that can be shown to this viewer.
-                  </EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            ) : (
-              <div className="space-y-6">
-                {assessment.lineagePaths.map((path, pathIndex) => (
-                  <LineagePath key={`path-${String(pathIndex + 1)}`} index={pathIndex} segments={path.segments} />
-                ))}
-              </div>
-            )}
-          </section>
+      <section aria-labelledby="assessment-summary-title" className="space-y-5">
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={assessment.status === 'block' || assessment.status === 'error' ? 'destructive' : 'outline'}>
+              {assessment.status.toUpperCase()}
+            </Badge>
+            <Badge variant="outline">{formatSeverity(assessment.severity)} severity</Badge>
+          </div>
+          <h1
+            id="assessment-summary-title"
+            className="max-w-[72ch] text-2xl font-semibold leading-tight tracking-tight"
+          >
+            {assessment.headline}
+          </h1>
         </div>
 
-        <aside className="border-t border-border pt-6 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
-          <h2 className="text-sm font-semibold">Review context</h2>
-          <dl className="mt-4 divide-y divide-border text-sm">
-            <MetadataRow label="Viewer" value={assessment.viewer.displayName} />
-            <MetadataRow label="Source" value="GitHub pull request" />
-            <MetadataRow label="Assessed" value={formatDateTime(assessment.source.createdAt)} />
-            <MetadataRow label="Freshness" value={formatFreshness(assessment.source.freshness)} />
-            <MetadataRow label="Base commit" value={<CommitValue sha={assessment.pullRequest.baseSha} />} />
-            <MetadataRow label="Head commit" value={<CommitValue sha={assessment.pullRequest.headSha} />} />
-            <MetadataRow
-              label="Reference"
-              value={<code className="block break-all font-mono text-xs">{assessment.reference}</code>}
-            />
-          </dl>
-        </aside>
-      </div>
+        <Alert className="max-w-[75ch] border-border">
+          <Info aria-hidden="true" />
+          <AlertTitle>Recommended action</AlertTitle>
+          <AlertDescription className="text-sm leading-6">{assessment.recommendedAction}</AlertDescription>
+        </Alert>
+
+        <dl className="grid max-w-4xl gap-x-8 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+          <SummaryFact label="Discovery certainty" value={formatDiscovery(assessment.confidence.discovery)} />
+          <SummaryFact
+            label="Interpretation confidence"
+            value={formatConfidence(assessment.confidence.interpretation)}
+          />
+          <SummaryFact label="Freshness" value={formatFreshness(assessment.source.freshness)} />
+          <SummaryFact label="Evidence origin" value={formatOrigin(assessment.source.evidenceOrigin)} />
+        </dl>
+      </section>
+
+      <Separator />
+
+      <section aria-labelledby="impact-map-title" className="space-y-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 id="impact-map-title" className="text-lg font-semibold">
+              Causal impact map
+            </h2>
+            <p className="mt-1 max-w-[72ch] text-sm leading-6 text-muted-foreground">
+              Only changed columns and deterministically grounded blocking paths are shown. Select an item to see why it
+              breaks and how to remediate it.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Select
+              value={scope}
+              onValueChange={(value) => {
+                if (value === 'direct' || value === 'all') setScope(value);
+              }}
+            >
+              <SelectTrigger className="w-44" aria-label="Impact scope">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Direct + transitive</SelectItem>
+                <SelectItem value="direct">Direct breaks only</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-pressed={showContext}
+              onClick={() => setShowContext((value) => !value)}
+            >
+              <Layers3 aria-hidden="true" />
+              {showContext ? 'Hide context' : 'Show context'}
+            </Button>
+          </div>
+        </div>
+
+        {visible.nodes.length === 0 ? (
+          <Empty className="min-h-52 border border-border">
+            <EmptyHeader>
+              <EmptyTitle>No verified causal graph is available</EmptyTitle>
+              <EmptyDescription>
+                Re-run the assessment if this change should have downstream consumers.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : (
+          <>
+            <div className="md:grid md:grid-cols-[minmax(0,1fr)_20rem] md:gap-6">
+              <div className="hidden md:block">
+                <ImpactGraph
+                  nodes={visible.nodes}
+                  edges={visible.edges}
+                  selectedId={selectedId}
+                  onSelect={setSelectedId}
+                />
+              </div>
+              <ImpactInspector assessment={assessment} selectedId={selectedId} onClose={() => setSelectedId(null)} />
+            </div>
+
+            <p className="text-sm text-muted-foreground md:hidden">Select an impact below to open its evidence.</p>
+          </>
+        )}
+      </section>
+
+      <section aria-labelledby="impact-list-title" className="space-y-3">
+        <div>
+          <h2 id="impact-list-title" className="text-lg font-semibold">
+            Impact list
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">Keyboard-accessible view synchronized with the graph.</p>
+        </div>
+        <ImpactList impacts={visible.impacts} selectedId={selectedId} onSelect={setSelectedId} />
+      </section>
+
+      <Separator />
+
+      <ReviewContext assessment={assessment} />
     </div>
   );
 }
 
-function LineagePath({ index, segments }: { index: number; segments: LineageSegment[] }) {
+function LegacyAssessment({ assessment }: { assessment: AssessmentViewV2 }) {
   return (
-    <section aria-labelledby={`path-${String(index + 1)}-title`}>
-      <h3
-        id={`path-${String(index + 1)}-title`}
-        className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-      >
-        Path {index + 1}
-      </h3>
-      <ol className="divide-y divide-border border-y border-border">
-        {segments.map((segment, segmentIndex) => (
-          <li
-            key={`${segment.kind}-${String(segmentIndex)}`}
-            className="grid grid-cols-[2rem_minmax(0,1fr)] items-start gap-3 py-3"
-          >
-            <span className="pt-0.5 text-right font-mono text-xs tabular-nums text-muted-foreground">
-              {String(segmentIndex + 1).padStart(2, '0')}
-            </span>
-            {segment.kind === 'restricted' ? (
-              <div className="flex min-w-0 items-center gap-2 border border-dashed border-border bg-muted/40 px-3 py-2">
-                <EyeOff className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                <span className="text-sm font-medium">Restricted segment</span>
-              </div>
-            ) : (
-              <div className="flex min-w-0 items-start gap-2 py-2">
-                <Database className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                <div className="min-w-0">
-                  <code className="block break-all font-mono text-sm font-medium">{segment.reference}</code>
-                  <p className="mt-1 text-xs text-muted-foreground">{formatAssetType(segment.assetType)}</p>
-                </div>
-              </div>
-            )}
-          </li>
-        ))}
-      </ol>
-    </section>
+    <div className="mx-auto max-w-3xl space-y-6 py-6">
+      <Alert>
+        <RotateCw aria-hidden="true" />
+        <AlertTitle>{assessment.headline}</AlertTitle>
+        <AlertDescription className="mt-2 space-y-2">
+          <p>{assessment.recommendedAction}</p>
+          <p>No lineage or explanation was reconstructed from legacy free-form evidence.</p>
+        </AlertDescription>
+      </Alert>
+      <ReviewContext assessment={assessment} />
+    </div>
   );
 }
 
-function MetadataRow({ label, value }: { label: string; value: React.ReactNode }) {
+function ReviewContext({ assessment }: { assessment: AssessmentViewV2 }) {
   return (
-    <div className="py-3 first:pt-0">
+    <Collapsible>
+      <CollapsibleTrigger asChild>
+        <Button variant="ghost" className="px-0" type="button">
+          <ChevronDown aria-hidden="true" />
+          Review context
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <dl className="mt-3 grid gap-x-8 gap-y-4 border-t border-border pt-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
+          <Metadata label="Viewer" value={assessment.viewer.displayName} />
+          <Metadata label="Assessed" value={formatDateTime(assessment.source.createdAt)} />
+          <Metadata label="Repository" value={assessment.pullRequest.repository} mono />
+          <Metadata label="Base commit" value={assessment.pullRequest.baseSha} mono />
+          <Metadata label="Head commit" value={assessment.pullRequest.headSha} mono />
+          <Metadata label="Assessment reference" value={assessment.reference} mono />
+        </dl>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+function SummaryFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="border-l border-border pl-3">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-1 break-words font-medium">{value}</dd>
+      <dd className="mt-1 font-medium">{value}</dd>
     </div>
   );
 }
 
-function CommitValue({ sha }: { sha: string }) {
+function Metadata({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
-    <code title={sha} className="break-all font-mono text-xs">
-      {sha}
-    </code>
+    <div className="min-w-0">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className={`mt-1 break-all font-medium ${mono ? 'font-mono text-xs' : ''}`}>{value}</dd>
+    </div>
   );
 }
 
-function formatDateTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(date);
+function formatSeverity(value: AssessmentViewV2['severity']) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function formatFreshness(value: AssessmentViewV1['source']['freshness']) {
+function formatDiscovery(value: AssessmentViewV2['confidence']['discovery']) {
+  if (value === 'complete') return 'Complete';
+  if (value === 'incomplete') return 'Incomplete';
+  return 'Unknown';
+}
+
+function formatConfidence(value: number | null) {
+  return value === null ? 'Unavailable' : `${String(Math.round(value * 100))}%`;
+}
+
+function formatFreshness(value: AssessmentViewV2['source']['freshness']) {
   if (value === 'current') return 'Current';
   if (value === 'stale') return 'Stale';
   return 'Unknown';
 }
 
-function formatAssetType(value: Extract<LineageSegment, { kind: 'asset' }>['assetType']) {
-  const labels: Record<typeof value, string> = {
-    table: 'Table',
-    view: 'View',
-    materialized_view: 'Materialized view',
-    streaming_table: 'Streaming table',
-    unknown: 'Data object',
-  };
-  return labels[value];
+function formatOrigin(value: AssessmentViewV2['source']['evidenceOrigin']) {
+  if (value === 'observed_lineage') return 'Observed lineage';
+  if (value === 'proposed_code') return 'Proposed code';
+  if (value === 'mixed') return 'Observed + proposed';
+  return 'Unavailable';
+}
+
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return value;
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
 }

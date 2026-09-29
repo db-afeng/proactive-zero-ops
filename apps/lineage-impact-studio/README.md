@@ -15,8 +15,15 @@ Databricks identity, and can review and approve one guarded remediation commit.
   principal.
 - `files.files` is intentionally not an OBO scope. Generic AppKit Files routes
   must remain denied; the service reads only validated envelope paths.
-- Browser responses use the redacted `AssessmentViewV1` contract. Raw evidence
-  must not enter browser payloads, HTML, telemetry, or logs.
+- Restricted envelope v3 publishes deterministic `display_evidence` alongside
+  the full server-only record. Browser responses use the redacted,
+  allowlisted `AssessmentViewV2` contract; legacy v2 records return only a
+  rerun-required state. Raw model prose and exact SQL must not enter the normal
+  browser payload, HTML, telemetry, or logs.
+- Exact expressions use `GET /api/assessments/:reference/source-evidence` and
+  are returned only after the same Unity Catalog OBO authorization plus
+  connected-user GitHub repository read access and exact PR base/head SHA
+  validation.
 - Lakebase stores OAuth state, encrypted GitHub tokens, fix sessions, encrypted
   patches, approvals, and append-only commit audit records. The app service
   principal must create and own the `lineage_impact` schema.
@@ -86,7 +93,9 @@ Use user-to-server OAuth with PKCE and this callback path:
 `/api/github/oauth/callback`. The acting identity comes from authenticated
 `GET /user`; no organization, email, administration, or webhook permissions
 are required. The app rejects forks and revalidates repository, PR state,
-write access, and exact head SHA before creating a normal commit.
+write access, and exact head SHA before creating a normal commit. Read-only
+source evidence uses a separate gate which requires pull access and matching
+assessed base/head SHAs but does not require push access.
 
 ## Release blockers
 
@@ -121,10 +130,10 @@ DATABRICKS_AUTH_STORAGE=plaintext databricks bundle validate --strict --profile 
 DATABRICKS_AUTH_STORAGE=plaintext databricks apps validate --profile fe-sandbox-proactive-zero-ops
 ```
 
-Also require the Playwright, accessibility, narrow/desktop layout, and stale
-commit flows to pass. The project-local Impeccable installer is blocked by the
-configured private npm proxy, so the fallback review is documented in
-`DESIGN.md` against the Slop catalog.
+Also require the Playwright graph, accessibility, visual-regression,
+narrow/desktop layout, source-evidence, and stale commit flows to pass. The
+manual Impeccable review is documented in `DESIGN.md`; Impeccable is not a
+runtime dependency.
 
 Configuration validation succeeded on 2026-09-28. Full Apps validation reached
 type checking and was not green at that point, so it is not a deployment
@@ -136,4 +145,7 @@ Deploy through the root bundle, verify the service principal owns
 `lineage_impact`, test
 full/partial/no-access OBO users and a disposable same-repository PR, then set
 the workflow's canonical app URL. Enable deep links only for newly published
-assessments; do not backfill runner-local historical evidence.
+assessments; do not backfill historical v2 evidence. After the guard and app
+are deployed together, close PR #4 and open a replacement from the same branch
+to publish a v3 assessment and verify the complete causal chain before wider
+rollout.

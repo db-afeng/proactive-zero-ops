@@ -1,15 +1,17 @@
 import { z } from 'zod';
 
-import type { RestrictedAssessmentEnvelopeV2 } from './restricted-envelope';
+import type {
+  DisplayEvidence,
+  RestrictedAssessmentEnvelope,
+  RestrictedAssessmentEnvelopeV3,
+} from './restricted-envelope';
 
-const MAX_LINEAGE_PATHS = 100;
 const MAX_UNIQUE_ASSETS = 500;
 
 const AssetReferenceSchema = z
   .string()
   .min(5)
   .max(1024)
-  .transform((value) => value.trim())
   .refine((value) => {
     const parts = value.split('.');
     return (
@@ -23,11 +25,22 @@ export interface ProjectedAsset {
   assetType: 'table' | 'view' | 'materialized_view' | 'streaming_table' | 'unknown';
 }
 
-export interface EvidenceProjection {
-  status: 'pass' | 'warn' | 'block' | 'error';
-  lineagePaths: ProjectedAsset[][];
-  uniqueAssets: ProjectedAsset[];
-}
+export type EvidenceProjection =
+  | {
+      detailState: 'legacy';
+      status: 'pass' | 'warn' | 'block' | 'error';
+      uniqueAssets: [];
+    }
+  | {
+      detailState: 'available';
+      status: 'pass' | 'warn' | 'block' | 'error';
+      severity: 'none' | 'low' | 'medium' | 'high' | 'critical';
+      interpretationConfidence: number;
+      discoveryCertainty: 'complete' | 'incomplete';
+      assessmentComplete: boolean;
+      display: DisplayEvidence;
+      uniqueAssets: ProjectedAsset[];
+    };
 
 export class EvidenceProjectionError extends Error {
   override readonly name = 'EvidenceProjectionError';
@@ -38,43 +51,40 @@ export class EvidenceProjectionError extends Error {
 }
 
 /**
- * Extract only validated UC references and the public status. No free-form
- * evidence string is eligible for a browser DTO through this projection.
+ * Project only deterministic display evidence. Legacy v2 records deliberately
+ * return no reconstructed lineage or free-form explanation.
  */
-export function projectRestrictedEvidence(envelope: RestrictedAssessmentEnvelopeV2): EvidenceProjection {
+export function projectRestrictedEvidence(envelope: RestrictedAssessmentEnvelope): EvidenceProjection {
   try {
-    const evidence = asRecord(envelope.evidence);
-    const result = asRecord(evidence.result);
-    const status = z.enum(['pass', 'warn', 'block', 'error']).parse(result.status);
-    const paths: ProjectedAsset[][] = [];
-    const typeByReference = new Map<string, ProjectedAsset['assetType']>();
-
-    collectImpactPaths(result.impacts, paths);
-    collectImpactPaths(asRecordOrUndefined(evidence.model_assessment)?.impacts, paths);
-
-    const discovery = asRecordOrUndefined(evidence.discovery);
-    collectSingleAssetPaths(discovery?.affected_datasets, paths);
-    collectEdges(result.lineage_edges, paths, typeByReference);
-    collectEdges(discovery?.proposed_code_dependencies, paths, typeByReference);
-
-    for (const value of asArray(result.changed_columns)) {
-      const candidate = parseAssetReference(asRecordOrUndefined(value)?.table);
-      if (candidate !== null) paths.push([{ reference: candidate, assetType: 'unknown' }]);
+    if (envelope.schema_version === 2) {
+      return {
+        detailState: 'legacy',
+        status: legacyStatus(envelope.evidence),
+        uniqueAssets: [],
+      };
     }
-
-    const normalizedPaths = deduplicatePaths(paths).map((path) =>
-      path.map((asset) => ({
-        ...asset,
-        assetType: typeByReference.get(asset.reference) ?? asset.assetType,
-      }))
-    );
-    const uniqueAssets = deduplicateAssets(normalizedPaths.flat());
-
-    if (normalizedPaths.length > MAX_LINEAGE_PATHS || uniqueAssets.length > MAX_UNIQUE_ASSETS) {
-      throw new EvidenceProjectionError();
+    validateGrounding(envelope);
+    const references = new Set<string>();
+    for (const change of envelope.evidence.display_evidence.changes) references.add(change.asset);
+    for (const impact of envelope.evidence.display_evidence.impacts) {
+      references.add(impact.target_asset);
+      for (const reference of impact.path) references.add(reference);
     }
-
-    return { status, lineagePaths: normalizedPaths, uniqueAssets };
+    for (const edge of envelope.evidence.display_evidence.edges) {
+      references.add(edge.source_asset);
+      references.add(edge.target_asset);
+    }
+    if (references.size > MAX_UNIQUE_ASSETS) throw new EvidenceProjectionError();
+    return {
+      detailState: 'available',
+      status: envelope.evidence.result.status,
+      severity: envelope.evidence.result.severity,
+      interpretationConfidence: envelope.evidence.result.confidence,
+      discoveryCertainty: envelope.evidence.result.discovery_certainty,
+      assessmentComplete: envelope.evidence.result.assessment_complete,
+      display: envelope.evidence.display_evidence,
+      uniqueAssets: [...references].sort().map((reference) => ({ reference, assetType: 'unknown' })),
+    };
   } catch (error) {
     if (error instanceof EvidenceProjectionError) throw error;
     throw new EvidenceProjectionError();
@@ -94,107 +104,44 @@ export function splitAssetReference(reference: string): {
   return { catalogName, schemaName, assetName };
 }
 
-function collectImpactPaths(value: unknown, paths: ProjectedAsset[][]): void {
-  for (const item of asArray(value)) {
-    const record = asRecordOrUndefined(item);
-    const path = record === undefined ? [] : parsePath(record.path);
-    if (path.length > 0) paths.push(path);
+function validateGrounding(envelope: RestrictedAssessmentEnvelopeV3): void {
+  const display = envelope.evidence.display_evidence;
+  const changes = new Map(display.changes.map((change) => [change.id, change]));
+  const requiredPairs = new Set<string>();
+  for (const impact of display.impacts) {
+    const change = changes.get(impact.change_id);
+    if (
+      change === undefined ||
+      impact.path[0] !== change.asset ||
+      impact.path[impact.path.length - 1] !== impact.target_asset
+    ) {
+      throw new EvidenceProjectionError();
+    }
+    if (impact.relation === 'transitive' && impact.path.length < 2) throw new EvidenceProjectionError();
+    for (let index = 0; index < impact.path.length - 1; index += 1) {
+      requiredPairs.add(edgeKey(impact.path[index], impact.path[index + 1]));
+    }
+  }
+
+  const observedPairs = new Set<string>();
+  for (const edge of display.edges) {
+    const key = edgeKey(edge.source_asset, edge.target_asset);
+    if (!requiredPairs.has(key)) throw new EvidenceProjectionError();
+    observedPairs.add(key);
+  }
+  for (const pair of requiredPairs) {
+    if (!observedPairs.has(pair)) throw new EvidenceProjectionError();
   }
 }
 
-function collectSingleAssetPaths(value: unknown, paths: ProjectedAsset[][]): void {
-  for (const item of asArray(value)) {
-    const reference = parseAssetReference(item);
-    if (reference !== null) paths.push([{ reference, assetType: 'unknown' }]);
-  }
+function legacyStatus(evidence: unknown): 'pass' | 'warn' | 'block' | 'error' {
+  if (typeof evidence !== 'object' || evidence === null || Array.isArray(evidence)) return 'error';
+  const result = z.unknown().parse(Reflect.get(evidence, 'result'));
+  if (typeof result !== 'object' || result === null || Array.isArray(result)) return 'error';
+  const parsed = z.enum(['pass', 'warn', 'block', 'error']).safeParse(Reflect.get(result, 'status'));
+  return parsed.success ? parsed.data : 'error';
 }
 
-function collectEdges(
-  value: unknown,
-  paths: ProjectedAsset[][],
-  typeByReference: Map<string, ProjectedAsset['assetType']>
-): void {
-  for (const item of asArray(value)) {
-    const edge = asRecordOrUndefined(item);
-    if (edge === undefined) continue;
-    const source = parseAssetReference(edge.source_table);
-    const target = parseAssetReference(edge.target_table);
-    if (source === null || target === null) continue;
-    const targetType = normalizeAssetType(edge.target_type);
-    typeByReference.set(target, targetType);
-    paths.push([
-      { reference: source, assetType: typeByReference.get(source) ?? 'unknown' },
-      { reference: target, assetType: targetType },
-    ]);
-  }
-}
-
-function parsePath(value: unknown): ProjectedAsset[] {
-  const result: ProjectedAsset[] = [];
-  for (const item of asArray(value)) {
-    const reference = parseAssetReference(item);
-    if (reference !== null) result.push({ reference, assetType: 'unknown' });
-  }
-  return result;
-}
-
-function parseAssetReference(value: unknown): string | null {
-  const parsed = AssetReferenceSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
-}
-
-function normalizeAssetType(value: unknown): ProjectedAsset['assetType'] {
-  if (typeof value !== 'string') return 'unknown';
-  switch (value.toUpperCase()) {
-    case 'TABLE':
-    case 'MANAGED':
-    case 'EXTERNAL':
-      return 'table';
-    case 'VIEW':
-      return 'view';
-    case 'MATERIALIZED_VIEW':
-      return 'materialized_view';
-    case 'STREAMING_TABLE':
-      return 'streaming_table';
-    default:
-      return 'unknown';
-  }
-}
-
-function deduplicatePaths(paths: readonly ProjectedAsset[][]): ProjectedAsset[][] {
-  const seen = new Set<string>();
-  const result: ProjectedAsset[][] = [];
-  for (const path of paths) {
-    if (path.length === 0) continue;
-    const key = path.map((asset) => asset.reference).join('\u0000');
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(path);
-  }
-  return result;
-}
-
-function deduplicateAssets(assets: readonly ProjectedAsset[]): ProjectedAsset[] {
-  const result = new Map<string, ProjectedAsset>();
-  for (const asset of assets) {
-    const previous = result.get(asset.reference);
-    if (previous === undefined || previous.assetType === 'unknown') result.set(asset.reference, asset);
-  }
-  return [...result.values()];
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  const record = asRecordOrUndefined(value);
-  if (record === undefined) throw new EvidenceProjectionError();
-  return record;
-}
-
-function asRecordOrUndefined(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+function edgeKey(source: string, target: string): string {
+  return `${source}\u0000${target}`;
 }
