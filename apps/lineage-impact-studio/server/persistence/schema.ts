@@ -90,6 +90,22 @@ export const LINEAGE_IMPACT_BOOTSTRAP_SQL = Object.freeze([
     CONSTRAINT validated_patch_expected_head_sha CHECK (expected_head_sha ~ '^[0-9a-f]{40,64}$'),
     CONSTRAINT validated_patch_digest CHECK (patch_digest ~ '^sha256:[0-9a-f]{64}$')
   )`,
+  `CREATE TABLE IF NOT EXISTS lineage_impact.fix_proposals (
+    actor_subject TEXT NOT NULL,
+    session_id UUID NOT NULL,
+    repository TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    commit_url TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (actor_subject, session_id),
+    CONSTRAINT fix_proposal_session_fk FOREIGN KEY (actor_subject, session_id)
+      REFERENCES lineage_impact.omnigent_sessions (actor_subject, id),
+    CONSTRAINT fix_proposal_sha_format CHECK (commit_sha ~ '^[0-9a-f]{40,64}$'),
+    CONSTRAINT fix_proposal_branch_length CHECK (char_length(branch) BETWEEN 1 AND 255)
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS fix_proposals_repository_branch_idx
+    ON lineage_impact.fix_proposals (repository, branch)`,
   `CREATE TABLE IF NOT EXISTS lineage_impact.patch_approvals (
     id UUID PRIMARY KEY,
     actor_subject TEXT NOT NULL,

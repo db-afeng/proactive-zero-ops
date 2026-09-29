@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
   pull-requests: write
 
@@ -299,6 +299,70 @@ jobs:
             --publication-receipt "$LINEAGE_GUARD_RESTRICTED_DIR/publication-receipt.json" \
             --volume-root "$LINEAGE_GUARD_RESTRICTED_VOLUME_ROOT" \
             --assessment-base-url "$LINEAGE_IMPACT_STUDIO_URL"
+
+      - name: Start and finalize automatic fix proposal
+        if: >-
+          ${{ always()
+              && steps.public.outcome == 'success'
+              && steps.public.outputs.exit_code == '1'
+              && steps.publication.outputs.published == 'true'
+              && steps.public.outputs.assessment_reference == steps.publication.outputs.assessment_reference }}
+        continue-on-error: true
+        env:
+          ASSESSMENT_REFERENCE: ${{ steps.public.outputs.assessment_reference }}
+          LINEAGE_FIX_GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          "$LINEAGE_GUARD_PYTHON" - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+
+          from databricks.sdk import WorkspaceClient
+
+          base_url = os.environ["LINEAGE_IMPACT_STUDIO_URL"].rstrip("/")
+          reference = os.environ["ASSESSMENT_REFERENCE"]
+          head_sha = os.environ["HEAD_SHA"]
+          github_token = os.environ["LINEAGE_FIX_GITHUB_TOKEN"]
+          auth_headers = dict(WorkspaceClient().config.authenticate())
+
+          def request(method, path, body=None):
+              payload = None if body is None else json.dumps(body).encode("utf-8")
+              headers = {
+                  **auth_headers,
+                  "Accept": "application/json",
+                  "Content-Type": "application/json",
+                  "X-Lineage-GitHub-Token": github_token,
+              }
+              call = urllib.request.Request(
+                  f"{base_url}{path}", data=payload, headers=headers, method=method
+              )
+              try:
+                  with urllib.request.urlopen(call, timeout=180) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as error:
+                  raise RuntimeError(f"automatic fix endpoint returned HTTP {error.code}") from None
+
+          session = request(
+              "POST",
+              f"/api/automation/assessments/{reference}/fix-sessions",
+              {"expectedHeadSha": head_sha},
+          )
+          session_id = session["id"]
+          for _ in range(120):
+              if session["status"] in {"complete", "failed", "cancelled"}:
+                  break
+              time.sleep(10)
+              session = request("GET", f"/api/automation/fix-sessions/{session_id}")
+          else:
+              raise RuntimeError("automatic fix proposal did not finish within 20 minutes")
+
+          if session["status"] != "complete":
+              raise RuntimeError(f"automatic fix proposal ended with status {session['status']}")
+          print("Automatic fix proposal is ready in Lineage Impact Studio.")
+          PY
 
       - name: Write job summary
         if: ${{ always() && steps.public.outcome == 'success' }}

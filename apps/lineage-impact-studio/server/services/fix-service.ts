@@ -11,6 +11,7 @@ import {
 import {
   LineageImpactRepository,
   PersistenceError,
+  type FixProposalView,
   type GitHubUserCredential,
   type OmnigentSessionView,
 } from '../persistence/repository';
@@ -26,6 +27,7 @@ export interface FixReviewView {
   status: 'complete';
   patchDigest: string;
   baseSha: string;
+  proposal: FixProposalView | null;
   files: ReturnType<typeof reviewFilesFromControlledPatch>;
   validations: Array<{
     name: string;
@@ -169,13 +171,17 @@ export class FixService {
   }
 
   async review(actorSubject: string, sessionId: string): Promise<FixReviewView | null> {
-    const patch = await this.repository.loadDecryptedValidatedPatchForSession(actorSubject, sessionId);
+    const [patch, proposal] = await Promise.all([
+      this.repository.loadDecryptedValidatedPatchForSession(actorSubject, sessionId),
+      this.repository.getFixProposalForSession(actorSubject, sessionId),
+    ]);
     if (patch === null) return null;
     return {
       sessionId,
       status: 'complete',
       patchDigest: patch.patchDigest,
       baseSha: patch.expectedHeadSha,
+      proposal,
       files: reviewFilesFromControlledPatch(patch.bytes, patch.files),
       validations: [
         {
@@ -208,7 +214,7 @@ export class FixService {
     let session = input.session;
     if (session.status === 'validating') {
       const existing = await this.repository.getValidatedPatchMetadataForSession(input.actorSubject, session.id);
-      return existing === null ? session : await this.complete(session, input.actorSubject);
+      return existing === null ? session : await this.publishProposalAndComplete(input, session);
     } else {
       try {
         session = await this.repository.transitionOmnigentSession({
@@ -224,11 +230,11 @@ export class FixService {
         if (current === null || isTerminal(current.status)) return current ?? session;
         if (current.status !== 'validating') return current;
         const existing = await this.repository.getValidatedPatchMetadataForSession(input.actorSubject, current.id);
-        return existing === null ? current : await this.complete(current, input.actorSubject);
+        return existing === null ? current : await this.publishProposalAndComplete(input, current);
       }
     }
     const existing = await this.repository.getValidatedPatchMetadataForSession(input.actorSubject, session.id);
-    if (existing !== null) return await this.complete(session, input.actorSubject);
+    if (existing !== null) return await this.publishProposalAndComplete(input, session);
 
     const changed = await this.omnigent.listChangedFiles(input.providerSessionId, input.omnigentAuth);
     if (changed.value.length === 0) {
@@ -260,6 +266,46 @@ export class FixService {
       patch,
       expectedFiles,
     });
+    return await this.publishProposalAndComplete(input, session);
+  }
+
+  async publishProposalAndComplete(
+    input: {
+      actorSubject: string;
+      assessment: AssessmentViewV3;
+      credential: GitHubUserCredential;
+    },
+    session: OmnigentSessionView
+  ): Promise<OmnigentSessionView> {
+    const existing = await this.repository.getFixProposalForSession(input.actorSubject, session.id);
+    if (existing === null) {
+      const patch = await this.repository.loadDecryptedValidatedPatchForSession(input.actorSubject, session.id);
+      if (patch === null) return session;
+      const branch = proposalBranch(input.assessment.pullRequest.number, session.id);
+      const created = await this.github.createProposalCommitFromValidatedPatch({
+        accessToken: input.credential.accessToken,
+        pullRequestNumber: input.assessment.pullRequest.number,
+        validatedPatch: {
+          gate: commitGateFromPatch(patch),
+          files: patch.files,
+          bytes: patch.bytes,
+          digest: patch.patchDigest,
+        },
+        expectedHeadSha: session.expectedHeadSha,
+        patchDigest: patch.patchDigest,
+        expectedFiles: patch.expectedFiles,
+        branch,
+        message: `Propose lineage impact remediation for PR #${String(input.assessment.pullRequest.number)}`,
+      });
+      await this.repository.storeFixProposal({
+        actorSubject: input.actorSubject,
+        sessionId: session.id,
+        repository: created.repository,
+        branch: created.branch,
+        commitSha: created.commitSha,
+        commitUrl: created.commitUrl,
+      });
+    }
     return await this.complete(session, input.actorSubject);
   }
 
@@ -375,6 +421,24 @@ function commitGate(pull: ValidatedPullRequest): CommitGateInput {
     expectedHeadSha: pull.headSha,
     observedHeadSha: pull.headSha,
   };
+}
+
+function commitGateFromPatch(patch: { expectedHeadSha: string }): CommitGateInput {
+  return {
+    baseRepository: 'db-afeng/proactive-zero-ops',
+    headRepository: 'db-afeng/proactive-zero-ops',
+    isFork: false,
+    pullRequestState: 'open',
+    canPush: true,
+    force: false,
+    commitStrategy: 'normal',
+    expectedHeadSha: patch.expectedHeadSha,
+    observedHeadSha: patch.expectedHeadSha,
+  };
+}
+
+function proposalBranch(pullRequestNumber: number, sessionId: string): string {
+  return `omnigent/pr-${String(pullRequestNumber)}/${sessionId.slice(0, 8)}`;
 }
 
 function toFixFileSnapshot(diff: OmnigentFileDiff) {

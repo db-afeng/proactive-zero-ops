@@ -8,7 +8,12 @@ import { CommitShaSchema, parseAssessmentReference } from '../domain/identifiers
 import { GitHubAppClient } from '../integrations/github';
 import { GitHubIntegrationError } from '../integrations/github/errors';
 import { OmnigentClient, OmnigentIntegrationError } from '../integrations/omnigent';
-import { LineageImpactRepository, PersistenceError, type OmnigentSessionView } from '../persistence/repository';
+import {
+  LineageImpactRepository,
+  PersistenceError,
+  type GitHubUserCredential,
+  type OmnigentSessionView,
+} from '../persistence/repository';
 import { bootstrapLineageImpactStore, type QueryExecutor } from '../persistence/schema';
 import { Aes256GcmCipher, decodeBase64EncryptionKey } from '../security/encryption';
 import { issueOAuthAttempt, OAUTH_COOKIE_OPTIONS } from '../security/oauth';
@@ -26,6 +31,9 @@ import { VolumeRestrictedEnvelopeReader, type VolumeReader } from '../services/r
 const OAUTH_BINDING_COOKIE = 'lineage_impact_oauth_binding';
 const OAUTH_RETURN_COOKIE = 'lineage_impact_oauth_return';
 const FIX_UNAVAILABLE_REASON = 'Fix generation could not authenticate to Omnigent from this app runtime.';
+const AUTOMATION_ACTOR_PREFIX = 'github-check:';
+const AUTOMATIC_FIX_GUIDANCE =
+  'Propose the smallest safe source change that resolves the blocking downstream impact while preserving existing contracts.';
 
 const StartFixBodySchema = z
   .object({
@@ -33,6 +41,8 @@ const StartFixBodySchema = z
     expectedHeadSha: CommitShaSchema,
   })
   .strict();
+
+const StartAutomaticFixBodySchema = z.object({ expectedHeadSha: CommitShaSchema }).strict();
 
 const PatchActionBodySchema = z
   .object({
@@ -273,27 +283,130 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
       }
     });
 
-    application.get('/api/fix-sessions/:id', async (request, response) => {
+    application.post('/api/automation/assessments/:reference/fix-sessions', async (request, response) => {
+      try {
+        requireOboRequest(request);
+        const body = StartAutomaticFixBodySchema.parse(request.body);
+        const view = await reauthorizeAssessment(assessmentService, appkit, request, request.params.reference);
+        if (view.detailState !== 'available') throw new DetailedEvidenceUnavailableError();
+        if (view.status !== 'block') {
+          response.status(409).json({ code: 'FIX_NOT_REQUIRED', message: 'This assessment is not blocking.' });
+          return;
+        }
+        if (body.expectedHeadSha !== view.pullRequest.headSha) {
+          response.status(409).json({
+            code: 'STALE_PULL_REQUEST',
+            message: 'The pull request no longer matches this assessment. Re-run the assessment.',
+          });
+          return;
+        }
+        if (fixService === null) {
+          sendUnavailable(response, FIX_UNAVAILABLE_REASON);
+          return;
+        }
+        const actorSubject = automationActor(view.reference);
+        const existing = await repository.getLatestOmnigentSession({
+          actorSubject,
+          assessmentReference: view.reference,
+          expectedHeadSha: body.expectedHeadSha,
+        });
+        if (existing !== null) {
+          response.json(toFixSession(existing));
+          return;
+        }
+        const sourceEvidence = await assessmentService.getSourceEvidence({
+          reference: request.params.reference,
+          authorizedView: view,
+        });
+        const session = await fixService.start({
+          actorSubject,
+          assessment: view,
+          sourceEvidence,
+          guidance: AUTOMATIC_FIX_GUIDANCE,
+          credential: transientGitHubCredential(request),
+          omnigentAuth: { oboToken: null },
+        });
+        response.status(202).json(toFixSession(session));
+      } catch (error) {
+        sendFixError(response, error);
+      }
+    });
+
+    application.get('/api/assessments/:reference/fix-session', async (request, response) => {
       try {
         const viewer = requireOboRequest(request);
-        let session = await repository.getOmnigentSession(viewer.subject, request.params.id);
-        if (session === null) {
+        const view = await reauthorizeAssessment(assessmentService, appkit, request, request.params.reference);
+        const automated = await repository.getLatestOmnigentSession({
+          actorSubject: automationActor(view.reference),
+          assessmentReference: view.reference,
+          expectedHeadSha: view.pullRequest.headSha,
+        });
+        const session =
+          automated ??
+          (await repository.getLatestOmnigentSession({
+            actorSubject: viewer.subject,
+            assessmentReference: view.reference,
+            expectedHeadSha: view.pullRequest.headSha,
+          }));
+        response.json({ session: session === null ? null : toFixSession(session) });
+      } catch (error) {
+        sendFixError(response, error);
+      }
+    });
+
+    application.get('/api/automation/fix-sessions/:id', async (request, response) => {
+      try {
+        requireOboRequest(request);
+        const owned = await repository.getOmnigentSessionById(request.params.id);
+        if (owned === null || !isAutomationActor(owned.actorSubject)) {
           response.status(404).json({ code: 'FIX_SESSION_NOT_FOUND', message: 'Fix session was not found.' });
           return;
         }
+        const view = await reauthorizeAssessment(assessmentService, appkit, request, owned.session.assessmentReference);
+        let session = owned.session;
+        if (fixService !== null && !isTerminalFixSession(session)) {
+          session = await fixService.synchronize({
+            actorSubject: owned.actorSubject,
+            session,
+            assessment: view,
+            credential: transientGitHubCredential(request),
+            omnigentAuth: { oboToken: null },
+          });
+        }
+        response.json(toFixSession(session));
+      } catch (error) {
+        sendFixError(response, error);
+      }
+    });
+
+    application.get('/api/fix-sessions/:id', async (request, response) => {
+      try {
+        const viewer = requireOboRequest(request);
+        const owned = await repository.getOmnigentSessionById(request.params.id);
+        if (owned === null || (!isAutomationActor(owned.actorSubject) && owned.actorSubject !== viewer.subject)) {
+          response.status(404).json({ code: 'FIX_SESSION_NOT_FOUND', message: 'Fix session was not found.' });
+          return;
+        }
+        let session = owned.session;
         const view = await reauthorizeAssessment(assessmentService, appkit, request, session.assessmentReference);
         if (fixService !== null && !isTerminalFixSession(session)) {
           const credential = await repository.loadGitHubCredential(viewer.subject);
           if (credential === null) {
+            if (isAutomationActor(owned.actorSubject)) {
+              response.json(toFixSession(session));
+              return;
+            }
             response.status(409).json({ code: 'GITHUB_DISCONNECTED', message: 'Reconnect GitHub to continue.' });
             return;
           }
           session = await fixService.synchronize({
-            actorSubject: viewer.subject,
+            actorSubject: owned.actorSubject,
             session,
             assessment: view,
             credential,
-            omnigentAuth: { oboToken: optionalOboAccessToken(request) },
+            omnigentAuth: {
+              oboToken: isAutomationActor(owned.actorSubject) ? null : optionalOboAccessToken(request),
+            },
           });
         }
         response.json(toFixSession(session));
@@ -338,17 +451,18 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
     application.get('/api/fix-sessions/:id/patch', async (request, response) => {
       try {
         const viewer = requireOboRequest(request);
-        const session = await repository.getOmnigentSession(viewer.subject, request.params.id);
-        if (session === null) {
+        const owned = await repository.getOmnigentSessionById(request.params.id);
+        if (owned === null || (!isAutomationActor(owned.actorSubject) && owned.actorSubject !== viewer.subject)) {
           response.status(404).json({ code: 'FIX_SESSION_NOT_FOUND', message: 'Fix session was not found.' });
           return;
         }
+        const session = owned.session;
         await reauthorizeAssessment(assessmentService, appkit, request, session.assessmentReference);
         if (fixService === null) {
           sendUnavailable(response, FIX_UNAVAILABLE_REASON);
           return;
         }
-        const patch = await fixService.review(viewer.subject, session.id);
+        const patch = await fixService.review(owned.actorSubject, session.id);
         if (patch === null) {
           response.status(404).json({ code: 'PATCH_NOT_FOUND', message: 'Validated patch was not found.' });
           return;
@@ -615,6 +729,37 @@ function isTerminalFixSession(session: OmnigentSessionView): boolean {
 
 function commitIdempotencyKey(sessionId: string, patchDigest: string): string {
   return `fix:${sessionId}:${createHash('sha256').update(patchDigest).digest('hex').slice(0, 24)}`;
+}
+
+function automationActor(assessmentReference: string): string {
+  return `${AUTOMATION_ACTOR_PREFIX}${parseAssessmentReference(assessmentReference)}`;
+}
+
+function isAutomationActor(actorSubject: string): boolean {
+  return actorSubject.startsWith(AUTOMATION_ACTOR_PREFIX);
+}
+
+function transientGitHubCredential(request: Request): GitHubUserCredential {
+  const value = request.headers['x-lineage-github-token'];
+  if (
+    typeof value !== 'string' ||
+    value.length < 20 ||
+    value.length > 4096 ||
+    [...value].some((character) => {
+      const point = character.codePointAt(0) ?? 0;
+      return point <= 0x20 || point === 0x7f;
+    })
+  ) {
+    throw new GitHubIntegrationError('unauthorized');
+  }
+  return {
+    accessToken: value,
+    refreshToken: null,
+    tokenType: 'bearer',
+    scopes: [],
+    expiresAt: null,
+    refreshTokenExpiresAt: null,
+  };
 }
 
 function optionalOAuthRuntime(): OAuthRuntime | null {

@@ -185,6 +185,13 @@ export interface ValidatedPatch {
   status: string;
   patchDigest: string;
   baseSha: string;
+  proposal: {
+    repository: string;
+    branch: string;
+    commitSha: string;
+    commitUrl: string | null;
+    createdAt: string;
+  } | null;
   files: PatchFile[];
   validations: PatchValidation[];
 }
