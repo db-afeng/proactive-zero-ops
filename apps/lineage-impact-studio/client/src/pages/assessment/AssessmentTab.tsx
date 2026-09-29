@@ -20,6 +20,7 @@ import {
 import { Check, ChevronDown, CircleAlert, RotateCw } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
+import { ScrollFadeArea } from '@/components/ScrollFadeArea';
 import type { AssessmentViewV3 } from '@/lib/contracts';
 
 import { ImpactGraph } from './ImpactGraph';
@@ -114,7 +115,12 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) 
       </section>
 
       <div className="lg:grid lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_26.5rem]">
-        <div className="space-y-6 px-4 py-4 md:px-6 lg:min-h-0 lg:overflow-y-auto lg:py-3">
+        <ScrollFadeArea
+          className="min-w-0"
+          viewportClassName="space-y-6 px-4 py-4 md:px-6 lg:py-3"
+          ariaLabel="Assessment impact content"
+          testId="assessment-scroll-region"
+        >
           <section aria-labelledby="impact-map-title" className="space-y-2">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <h2 id="impact-map-title" className="text-base font-semibold">
@@ -184,7 +190,7 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) 
           </section>
 
           <ReviewContext assessment={assessment} />
-        </div>
+        </ScrollFadeArea>
 
         <ImpactInspector
           assessment={assessment}

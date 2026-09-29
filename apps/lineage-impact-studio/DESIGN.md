@@ -40,12 +40,20 @@ and warning and destructive column badges distinguish the
 changed and downstream impacted columns. Samples are never described as
 proposed pull-request output and disappear immediately when the OBO read fails.
 
-The graph uses a subtle token-based dot field as a canvas affordance and has no
-minimap. Proposed-code edges are dashed; observed lineage is solid. Only
-verified breaks use destructive color, while the proposed contract change uses
-warning color. The synchronized list is the primary small-screen representation
-and opens evidence in an AppKit sheet. Legacy v2 envelopes show a rerun-required
-message and never attempt to reconstruct facts from model prose.
+The graph uses a subtle token-based React Flow dot field as a canvas affordance,
+so the field tracks the DAG while panning and zooming, and has no minimap. Node
+surfaces are opaque so the field never competes with their labels.
+Proposed-code edges are dashed; observed lineage is solid. Only verified breaks
+use destructive color, while the proposed contract change uses warning color.
+The synchronized list is the primary small-screen representation and opens
+evidence in an AppKit sheet. Legacy v2 envelopes show a rerun-required message
+and never attempt to reconstruct facts from model prose.
+
+The fixed-height desktop assessment and inspector use independent, auto-hiding
+vertical scrollbars. Token-based fades appear only where more content remains;
+the dataset table keeps its horizontal scrollbar. Authorized expressions are
+formatted as Spark SQL and use categorical syntax colors without changing the
+underlying evidence.
 
 Loading progresses from a skeleton to explicit workspace/evidence checking at
 10 seconds, then aborts at 90 seconds with a retry. Empty, stale, partial,

@@ -15,18 +15,24 @@ body {
   min-height: 100vh;
 }
 
-.impact-graph-canvas {
-  background-image: radial-gradient(
-    circle,
-    color-mix(in srgb, var(--muted-foreground) 25%, transparent) 1px,
-    transparent 1px
-  );
-  background-position: 0 0;
-  background-size: 16px 16px;
-}
-
 .impact-graph-canvas .react-flow__pane {
   cursor: default;
+}
+
+.impact-node-changed {
+  background-color: color-mix(in srgb, var(--warning) 15%, var(--background));
+}
+
+.impact-node-direct-break {
+  background-color: color-mix(in srgb, var(--destructive) 10%, var(--background));
+}
+
+.impact-node-transitive {
+  background-color: var(--background);
+}
+
+.impact-node-context {
+  background-color: color-mix(in srgb, var(--muted) 45%, var(--background));
 }
 
 .impact-node-selected {
@@ -38,6 +44,83 @@ body {
 .impact-row-selected {
   border-left-color: var(--chart-cat-1);
   background: color-mix(in srgb, var(--chart-cat-1) 8%, transparent);
+}
+
+.subtle-scroll-y {
+  scrollbar-color: transparent transparent;
+  scrollbar-width: thin;
+}
+
+.subtle-scroll-y::-webkit-scrollbar {
+  width: 6px;
+}
+
+.subtle-scroll-y::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.subtle-scroll-y::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: transparent;
+}
+
+.subtle-scroll-y[data-scrolling='true'] {
+  scrollbar-color: color-mix(in srgb, var(--muted-foreground) 55%, transparent) transparent;
+}
+
+.subtle-scroll-y[data-scrolling='true']::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted-foreground) 55%, transparent);
+}
+
+.scroll-fade-edge {
+  pointer-events: none;
+  position: absolute;
+  z-index: 10;
+  right: 6px;
+  left: 0;
+  height: 1.5rem;
+}
+
+.scroll-fade-edge-before {
+  top: 0;
+  background: linear-gradient(to bottom, var(--background), transparent);
+}
+
+.scroll-fade-edge-after {
+  bottom: 0;
+  background: linear-gradient(to top, var(--background), transparent);
+}
+
+.sql-code {
+  background-color: color-mix(in srgb, var(--muted) 45%, var(--background));
+  color: var(--foreground);
+  white-space: pre;
+}
+
+.sql-token-keyword {
+  color: var(--chart-cat-1);
+  font-weight: 600;
+}
+
+.sql-token-function {
+  color: var(--chart-cat-3);
+}
+
+.sql-token-string {
+  color: var(--chart-cat-2);
+}
+
+.sql-token-number {
+  color: var(--chart-cat-4);
+}
+
+.sql-token-comment {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.sql-token-identifier {
+  color: var(--chart-cat-6);
 }
 
 [data-slot='tabs-trigger'].workbench-tab {

@@ -14,11 +14,13 @@ import {
 import { AlertCircle, ExternalLink, Github, Loader2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
+import { ScrollFadeArea } from '@/components/ScrollFadeArea';
 import { ApiRequestError, getSourceEvidence, githubLoginUrl } from '@/lib/api';
 import type { AssessmentGraphEdge, AssessmentImpact, AssessmentViewV3, SourceEvidenceView } from '@/lib/contracts';
 
 import { DatasetSample } from './DatasetSample';
 import { isVerifiedBreak, operationLabel, reasonText, targetLabel } from './impact-copy';
+import { formatSparkSql, tokenizeSql } from './sql-code';
 
 type SourceState =
   | { kind: 'idle' }
@@ -68,11 +70,10 @@ export function ImpactInspector({
     );
   }
   return (
-    <aside
-      className="hidden min-h-0 overflow-y-auto border-l border-border bg-background lg:block"
-      aria-label="Impact evidence"
-    >
-      {content}
+    <aside className="hidden min-h-0 border-l border-border bg-background lg:block" aria-label="Impact evidence">
+      <ScrollFadeArea className="h-full" ariaLabel="Impact evidence details" testId="impact-inspector-scroll-region">
+        {content}
+      </ScrollFadeArea>
     </aside>
   );
 }
@@ -409,11 +410,31 @@ function SourceEvidence({
 }
 
 function Expression({ label, value }: { label: string; value: string | null }) {
+  const formatted = value === null ? 'Not available' : formatSparkSql(value);
+  const tokens = value === null ? [{ value: formatted, kind: 'plain' as const }] : tokenizeSql(formatted);
   return (
     <div>
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap break-words border border-border bg-muted/30 p-3 font-mono text-xs leading-5">
-        {value ?? 'Not available'}
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs text-muted-foreground">{label}</p>
+        {value === null ? null : (
+          <Badge variant="outline" className="font-mono text-[11px] font-normal">
+            SQL
+          </Badge>
+        )}
+      </div>
+      <pre
+        className="sql-code mt-1 max-h-56 overflow-auto border border-border p-3 font-mono text-xs leading-5"
+        aria-label={value === null ? label : `${label} SQL`}
+        data-language={value === null ? undefined : 'spark-sql'}
+        tabIndex={value === null ? undefined : 0}
+      >
+        <code>
+          {tokens.map((token, index) => (
+            <span key={`${String(index)}-${token.value}`} className={`sql-token-${token.kind}`}>
+              {token.value}
+            </span>
+          ))}
+        </code>
       </pre>
     </div>
   );
