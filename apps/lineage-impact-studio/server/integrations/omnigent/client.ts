@@ -411,9 +411,10 @@ function responseError(status: number): OmnigentIntegrationError {
 }
 
 function normalizedWorkspaceHost(value: string): string {
+  const candidate = value.includes('://') ? value : `https://${value}`;
   let url: URL;
   try {
-    url = new URL(value);
+    url = new URL(candidate);
   } catch {
     throw new OmnigentIntegrationError('invalid_configuration');
   }

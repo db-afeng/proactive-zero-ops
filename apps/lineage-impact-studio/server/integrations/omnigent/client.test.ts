@@ -14,6 +14,19 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('Omnigent authentication', () => {
+  it('accepts the hostname-only DATABRICKS_HOST format injected into apps', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ id: 'me' }));
+    const client = new OmnigentClient({
+      workspaceHost: 'workspace.example.databricks.com',
+      fetchImplementation: fetchMock,
+    });
+
+    await expect(client.probe({ oboToken: OBO_TOKEN })).resolves.toEqual({ available: true, authMode: 'obo' });
+    expect(requestUrl(fetchMock.mock.calls[0]?.[0])).toBe(
+      'https://workspace.example.databricks.com/api/2.0/omnigent/v1/me'
+    );
+  });
+
   it('uses the user OBO token when Omnigent accepts it', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ id: 'me' }));
     const servicePrincipal = { getToken: vi.fn().mockResolvedValue(SERVICE_TOKEN) };
