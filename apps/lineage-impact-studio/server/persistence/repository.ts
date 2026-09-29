@@ -96,12 +96,26 @@ export interface OmnigentSessionView {
   finishedAt: string | null;
 }
 
+export interface OwnedOmnigentSession {
+  actorSubject: string;
+  session: OmnigentSessionView;
+}
+
 export interface ValidatedPatchMetadata {
   id: string;
   sessionId: string;
   expectedHeadSha: string;
   patchDigest: string;
   files: ChangedFileDescriptor[];
+  createdAt: string;
+}
+
+export interface FixProposalView {
+  sessionId: string;
+  repository: string;
+  branch: string;
+  commitSha: string;
+  commitUrl: string | null;
   createdAt: string;
 }
 
@@ -200,6 +214,8 @@ const OmnigentSessionRowSchema = z.object({
   finished_at: TimestampSchema.nullable(),
 });
 
+const OwnedOmnigentSessionRowSchema = OmnigentSessionRowSchema.extend({ actor_subject: ActorSchema });
+
 const ValidatedPatchRowSchema = z.object({
   id: UuidSchema,
   session_id: UuidSchema,
@@ -212,6 +228,15 @@ const ValidatedPatchRowSchema = z.object({
 const DecryptedPatchRowSchema = ValidatedPatchRowSchema.extend({
   expected_files: z.unknown(),
   encrypted_patch: z.unknown(),
+});
+
+const FixProposalRowSchema = z.object({
+  session_id: UuidSchema,
+  repository: GitHubRepositorySchema,
+  branch: z.string().min(1).max(255),
+  commit_sha: CommitShaSchema,
+  commit_url: z.string().url().nullable(),
+  created_at: TimestampSchema,
 });
 
 const ApprovalRowSchema = z.object({
@@ -416,6 +441,61 @@ export class LineageImpactRepository {
     return mapOmnigentSession(parseSingleRow(OmnigentSessionRowSchema, result.rows));
   }
 
+  async getLatestOmnigentSession(input: {
+    actorSubject: string;
+    assessmentReference: string;
+    expectedHeadSha: string;
+  }): Promise<OmnigentSessionView | null> {
+    const actor = ActorSchema.parse(input.actorSubject);
+    const reference = AssessmentReferenceSchema.parse(input.assessmentReference);
+    const expectedHeadSha = CommitShaSchema.parse(input.expectedHeadSha);
+    const result = await this.executor.query(
+      `SELECT id, provider_session_id, assessment_reference, expected_head_sha, authorized_evidence_digest,
+        guidance, status, status_message, cancel_requested_at, created_at, updated_at, finished_at
+       FROM lineage_impact.omnigent_sessions
+       WHERE actor_subject = $1 AND assessment_reference = $2 AND expected_head_sha = $3
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+      [actor, reference, expectedHeadSha]
+    );
+    if (result.rows.length === 0) return null;
+    return mapOmnigentSession(parseSingleRow(OmnigentSessionRowSchema, result.rows));
+  }
+
+  async getLatestOmnigentSessionForAssessment(input: {
+    assessmentReference: string;
+    expectedHeadSha: string;
+  }): Promise<OwnedOmnigentSession | null> {
+    const reference = AssessmentReferenceSchema.parse(input.assessmentReference);
+    const expectedHeadSha = CommitShaSchema.parse(input.expectedHeadSha);
+    const result = await this.executor.query(
+      `SELECT actor_subject, id, provider_session_id, assessment_reference, expected_head_sha,
+        authorized_evidence_digest, guidance, status, status_message, cancel_requested_at,
+        created_at, updated_at, finished_at
+       FROM lineage_impact.omnigent_sessions
+       WHERE assessment_reference = $1 AND expected_head_sha = $2
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+      [reference, expectedHeadSha]
+    );
+    if (result.rows.length === 0) return null;
+    return mapOwnedOmnigentSession(parseSingleRow(OwnedOmnigentSessionRowSchema, result.rows));
+  }
+
+  async getOmnigentSessionById(sessionId: string): Promise<OwnedOmnigentSession | null> {
+    const id = UuidSchema.parse(sessionId);
+    const result = await this.executor.query(
+      `SELECT actor_subject, id, provider_session_id, assessment_reference, expected_head_sha,
+        authorized_evidence_digest, guidance, status, status_message, cancel_requested_at,
+        created_at, updated_at, finished_at
+       FROM lineage_impact.omnigent_sessions
+       WHERE id = $1`,
+      [id]
+    );
+    if (result.rows.length === 0) return null;
+    return mapOwnedOmnigentSession(parseSingleRow(OwnedOmnigentSessionRowSchema, result.rows));
+  }
+
   async transitionOmnigentSession(input: {
     actorSubject: string;
     sessionId: string;
@@ -598,6 +678,68 @@ export class LineageImpactRepository {
     if (computePatchDigest(bytes) !== metadata.patchDigest) throw new PersistenceError('invalid_record');
     const expectedFiles = parsePersistedExpectedFiles(row.expected_files, metadata.files);
     return { ...metadata, bytes, expectedFiles };
+  }
+
+  async storeFixProposal(input: {
+    actorSubject: string;
+    sessionId: string;
+    repository: string;
+    branch: string;
+    commitSha: string;
+    commitUrl: string | null;
+    now?: Date;
+  }): Promise<FixProposalView> {
+    const actor = ActorSchema.parse(input.actorSubject);
+    const sessionId = UuidSchema.parse(input.sessionId);
+    const repository = GitHubRepositorySchema.parse(input.repository);
+    const branch = z.string().min(1).max(255).parse(input.branch);
+    const commitSha = CommitShaSchema.parse(input.commitSha);
+    const commitUrl = input.commitUrl === null ? null : z.string().url().parse(input.commitUrl);
+    const now = validateDate(input.now ?? new Date()).toISOString();
+    const result = await this.executor.query(
+      `WITH inserted AS (
+         INSERT INTO lineage_impact.fix_proposals (
+           actor_subject, session_id, repository, branch, commit_sha, commit_url, created_at
+         )
+         SELECT $1, $2, $3, $4, $5, $6, $7
+         FROM lineage_impact.validated_patches
+         WHERE actor_subject = $1 AND session_id = $2
+         ON CONFLICT (actor_subject, session_id) DO NOTHING
+         RETURNING session_id, repository, branch, commit_sha, commit_url, created_at
+       )
+       SELECT * FROM inserted
+       UNION ALL
+       SELECT session_id, repository, branch, commit_sha, commit_url, created_at
+       FROM lineage_impact.fix_proposals
+       WHERE actor_subject = $1 AND session_id = $2
+         AND NOT EXISTS (SELECT 1 FROM inserted)
+       LIMIT 1`,
+      [actor, sessionId, repository, branch, commitSha, commitUrl, now]
+    );
+    if (result.rows.length !== 1) throw new PersistenceError('not_found');
+    const proposal = mapFixProposal(parseSingleRow(FixProposalRowSchema, result.rows));
+    if (
+      proposal.repository.toLowerCase() !== repository.toLowerCase() ||
+      proposal.branch !== branch ||
+      proposal.commitSha !== commitSha ||
+      proposal.commitUrl !== commitUrl
+    ) {
+      throw new PersistenceError('idempotency_conflict');
+    }
+    return proposal;
+  }
+
+  async getFixProposalForSession(actorSubject: string, sessionId: string): Promise<FixProposalView | null> {
+    const actor = ActorSchema.parse(actorSubject);
+    const id = UuidSchema.parse(sessionId);
+    const result = await this.executor.query(
+      `SELECT session_id, repository, branch, commit_sha, commit_url, created_at
+       FROM lineage_impact.fix_proposals
+       WHERE actor_subject = $1 AND session_id = $2`,
+      [actor, id]
+    );
+    if (result.rows.length === 0) return null;
+    return mapFixProposal(parseSingleRow(FixProposalRowSchema, result.rows));
   }
 
   async approvePatch(input: {
@@ -849,6 +991,10 @@ function mapOmnigentSession(row: z.infer<typeof OmnigentSessionRowSchema>): Omni
   };
 }
 
+function mapOwnedOmnigentSession(row: z.infer<typeof OwnedOmnigentSessionRowSchema>): OwnedOmnigentSession {
+  return { actorSubject: row.actor_subject, session: mapOmnigentSession(row) };
+}
+
 function mapPatchMetadata(row: z.infer<typeof ValidatedPatchRowSchema>): ValidatedPatchMetadata {
   return {
     id: row.id,
@@ -856,6 +1002,17 @@ function mapPatchMetadata(row: z.infer<typeof ValidatedPatchRowSchema>): Validat
     expectedHeadSha: row.expected_head_sha,
     patchDigest: row.patch_digest,
     files: z.array(ChangedFileDescriptorSchema).min(1).max(50).parse(parseJsonColumn(row.changed_files)),
+    createdAt: row.created_at,
+  };
+}
+
+function mapFixProposal(row: z.infer<typeof FixProposalRowSchema>): FixProposalView {
+  return {
+    sessionId: row.session_id,
+    repository: row.repository,
+    branch: row.branch,
+    commitSha: row.commit_sha,
+    commitUrl: row.commit_url,
     createdAt: row.created_at,
   };
 }

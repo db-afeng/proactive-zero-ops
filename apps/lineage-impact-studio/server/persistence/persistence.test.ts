@@ -46,6 +46,7 @@ describe('Lakebase persistence bootstrap', () => {
       'github_connections',
       'omnigent_sessions',
       'validated_patches',
+      'fix_proposals',
       'patch_approvals',
       'commit_intents',
       'commit_audit_events',
@@ -295,5 +296,35 @@ describe('LineageImpactRepository', () => {
     expect(executor.calls[0]?.text).not.toContain('INSERT');
     expect(executor.calls[0]?.text).toContain('actor_subject = $1');
     expect(executor.calls[0]?.params).toEqual([ACTOR, sessionId, headSha, patchDigest]);
+  });
+
+  it('stores and retrieves one isolated proposal branch per fix session', async () => {
+    const sessionId = '33333333-3333-4333-8333-333333333333';
+    const row = {
+      session_id: sessionId,
+      repository: 'db-afeng/proactive-zero-ops',
+      branch: 'omnigent/pr-4/33333333',
+      commit_sha: 'c'.repeat(40),
+      commit_url: 'https://github.com/db-afeng/proactive-zero-ops/commit/example',
+      created_at: '2026-09-28T00:03:00.000Z',
+    };
+    const executor = new ScriptedExecutor([{ rows: [row] }, { rows: [row] }]);
+    const repository = new LineageImpactRepository(executor, new Aes256GcmCipher(randomBytes(32)));
+
+    const stored = await repository.storeFixProposal({
+      actorSubject: ACTOR,
+      sessionId,
+      repository: row.repository,
+      branch: row.branch,
+      commitSha: row.commit_sha,
+      commitUrl: row.commit_url,
+      now: new Date(row.created_at),
+    });
+    const loaded = await repository.getFixProposalForSession(ACTOR, sessionId);
+
+    expect(stored).toEqual(loaded);
+    expect(stored.branch).toBe(row.branch);
+    expect(executor.calls[0]?.text).toContain('ON CONFLICT (actor_subject, session_id) DO NOTHING');
+    expect(executor.calls[1]?.params).toEqual([ACTOR, sessionId]);
   });
 });

@@ -4,6 +4,7 @@ import type { Page, Route } from '@playwright/test';
 const REFERENCE = 'assessment_K4z7pq2X';
 const HEAD_SHA = 'f1e2d3c4b5a697887766554433221100ffeeddcc';
 const PATCH_DIGEST = 'sha256:996a18d9270f53766792eb17edcf73d5540fe9dc56820cb5de161e1151c71dc8';
+const PROPOSAL_SHA = '1234567890abcdef1234567890abcdef12345678';
 
 const assessment = {
   schemaVersion: 3,
@@ -428,17 +429,15 @@ test('toggles and persists the selected color theme', async ({ page }) => {
   await expect(page.locator('html')).toHaveClass(/light/);
 });
 
-test('reviews a validated patch and blocks a commit when the PR head becomes stale', async ({ page }) => {
-  let createBody: unknown;
-  let approvalBody: unknown;
-  let commitBody: unknown;
-
-  await page.route(`**/api/assessments/${REFERENCE}/fix-sessions`, async (route) => {
-    createBody = route.request().postDataJSON();
+test('loads the automatic proposal with its isolated commit and cherry-pick command', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.route(`**/api/assessments/${REFERENCE}/fix-session`, async (route) => {
     await fulfillJson(route, {
-      id: 'fix-session-1',
-      status: 'complete',
-      message: 'Validated patch ready.',
+      session: {
+        id: 'fix-session-1',
+        status: 'complete',
+        message: 'Validated patch ready.',
+      },
     });
   });
   await page.route('**/api/fix-sessions/fix-session-1/patch', async (route) => {
@@ -447,6 +446,13 @@ test('reviews a validated patch and blocks a commit when the PR head becomes sta
       status: 'complete',
       patchDigest: PATCH_DIGEST,
       baseSha: HEAD_SHA,
+      proposal: {
+        repository: 'db-afeng/proactive-zero-ops',
+        branch: 'omnigent/pr-4/fix-session',
+        commitSha: PROPOSAL_SHA,
+        commitUrl: `https://github.com/db-afeng/proactive-zero-ops/commit/${PROPOSAL_SHA}`,
+        createdAt: '2026-09-28T10:04:00+10:00',
+      },
       files: [
         {
           path: 'src/models/orders.sql',
@@ -472,41 +478,18 @@ test('reviews a validated patch and blocks a commit when the PR head becomes sta
       ],
     });
   });
-  await page.route('**/api/fix-sessions/fix-session-1/approval', async (route) => {
-    approvalBody = route.request().postDataJSON();
-    await fulfillJson(route, { approvedAt: '2026-09-28T10:04:00+10:00' });
-  });
-  await page.route('**/api/fix-sessions/fix-session-1/commit', async (route) => {
-    commitBody = route.request().postDataJSON();
-    await fulfillJson(
-      route,
-      {
-        code: 'STALE_HEAD',
-        message: 'The pull request head changed after approval.',
-      },
-      409
-    );
-  });
 
   await page.goto(`/assessments/${REFERENCE}#fix`);
-  await page.getByLabel('Guidance for Omnigent').fill('Preserve the downstream contract and add a null guard.');
-  await page.getByRole('button', { name: 'Generate fix' }).click();
 
+  await expect(page.getByText('Isolated proposal ready', { exact: true })).toBeVisible();
+  await expect(page.getByText('omnigent/pr-4/fix-session', { exact: true })).toBeVisible();
   await expect(page.getByText('src/models/orders.sql', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('Protected paths', { exact: true })).toBeVisible();
   await expect(page.getByText('Patch integrity', { exact: true })).toBeVisible();
-  expect(createBody).toEqual({
-    guidance: 'Preserve the downstream contract and add a null guard.',
-    expectedHeadSha: HEAD_SHA,
-  });
-
-  await page.getByRole('button', { name: 'Approve this patch' }).click();
-  await expect(page.getByRole('button', { name: 'Commit approved patch' })).toBeVisible();
-  expect(approvalBody).toEqual({ patchDigest: PATCH_DIGEST, expectedHeadSha: HEAD_SHA });
-
-  await page.getByRole('button', { name: 'Commit approved patch' }).click();
-  await expect(page.getByText('Pull request head must be reassessed', { exact: true })).toBeVisible();
-  expect(commitBody).toEqual({ patchDigest: PATCH_DIGEST, expectedHeadSha: HEAD_SHA });
+  await expect(page.getByText(`git cherry-pick ${PROPOSAL_SHA}`, { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Copy cherry-pick command' }).click();
+  await expect(page.getByText('Cherry-pick command copied to clipboard.', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`git cherry-pick ${PROPOSAL_SHA}`);
 });
 
 for (const status of [403, 404]) {
@@ -611,6 +594,9 @@ async function mockAssessmentApis(page: Page) {
   });
   await page.route('**/api/capabilities', async (route) => {
     await fulfillJson(route, { omnigent: { available: true } });
+  });
+  await page.route(`**/api/assessments/${REFERENCE}/fix-session`, async (route) => {
+    await fulfillJson(route, { session: null });
   });
   await page.route('**/api/audit/*', async (route) => {
     await fulfillJson(route, { records: [] });

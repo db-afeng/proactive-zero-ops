@@ -135,6 +135,14 @@ export async function createFixSession(
   return unwrapSession(result);
 }
 
+export async function getAssessmentFixSession(reference: string, signal?: AbortSignal): Promise<FixSession | null> {
+  const result = await requestJson<{ session: FixSession | null }>(
+    `/api/assessments/${encodeURIComponent(reference)}/fix-session`,
+    { cache: 'no-store', signal }
+  );
+  return result.session;
+}
+
 export async function getFixSession(id: string, signal?: AbortSignal): Promise<FixSession> {
   const result = await requestJson<FixSession | { session: FixSession }>(
     `/api/fix-sessions/${encodeURIComponent(id)}`,

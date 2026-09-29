@@ -83,6 +83,10 @@ export interface CreatedCommit {
   commitUrl: string | null;
 }
 
+export interface CreatedProposal extends CreatedCommit {
+  branch: string;
+}
+
 const OAuthTokenResponseSchema = z.object({
   access_token: z.string().min(1).max(4096),
   refresh_token: z.string().min(1).max(4096).optional(),
@@ -121,6 +125,7 @@ const GitReferenceResponseSchema = z.object({ object: z.object({ sha: CommitShaS
 const GitCommitResponseSchema = z.object({
   sha: CommitShaSchema,
   tree: z.object({ sha: CommitShaSchema }).optional(),
+  parents: z.array(z.object({ sha: CommitShaSchema })).optional(),
   html_url: z.string().url().optional(),
 });
 const GitTreeResponseSchema = z.object({
@@ -442,15 +447,116 @@ export class GitHubAppClient {
     expectedFiles: ExpectedFileVersion[];
     message: string;
   }): Promise<CreatedCommit> {
-    validateAccessToken(input.accessToken);
     const message = validateCommitMessage(input.message);
+    const prepared = await this.buildValidatedTree(input);
+    const createdCommit = await this.createGitCommit({
+      accessToken: input.accessToken,
+      message,
+      treeSha: prepared.treeSha,
+      parentSha: prepared.expectedHeadSha,
+    });
+
+    await this.assertBranchHead(input.accessToken, prepared.pull.headRef, prepared.expectedHeadSha);
+    const updateResponse = await this.apiJson(
+      `/repos/${PINNED_GITHUB_REPOSITORY}/git/refs/heads/${encodeBranch(prepared.pull.headRef)}`,
+      input.accessToken,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ sha: createdCommit.data.sha, force: false }),
+      }
+    );
+    const updatedRef = GitReferenceResponseSchema.safeParse(updateResponse);
+    if (!updatedRef.success || updatedRef.data.object.sha !== createdCommit.data.sha) {
+      throw new GitHubIntegrationError('invalid_response');
+    }
+    return {
+      repository: PINNED_GITHUB_REPOSITORY,
+      pullRequestNumber: prepared.pull.number,
+      previousHeadSha: prepared.expectedHeadSha,
+      commitSha: createdCommit.data.sha,
+      commitUrl: createdCommit.data.html_url ?? null,
+    };
+  }
+
+  /** Publishes a validated patch on an isolated branch without advancing the pull-request branch. */
+  async createProposalCommitFromValidatedPatch(input: {
+    accessToken: string;
+    pullRequestNumber: number;
+    validatedPatch: ValidatedPatch;
+    expectedHeadSha: string;
+    patchDigest: string;
+    expectedFiles: ExpectedFileVersion[];
+    branch: string;
+    message: string;
+  }): Promise<CreatedProposal> {
+    const branch = validateBranchName(input.branch);
+    const message = validateCommitMessage(input.message);
+    const prepared = await this.buildValidatedTree({
+      accessToken: input.accessToken,
+      pullRequestNumber: input.pullRequestNumber,
+      validatedPatch: input.validatedPatch,
+      approvedExpectedHeadSha: input.expectedHeadSha,
+      approvedPatchDigest: input.patchDigest,
+      expectedFiles: input.expectedFiles,
+    });
+    if (branch === prepared.pull.headRef) throw new GitHubIntegrationError('invalid_request');
+
+    const existing = await this.readBranchHead(input.accessToken, branch);
+    if (existing !== null) {
+      const commit = await this.validateProposalCommit(
+        input.accessToken,
+        existing,
+        prepared.expectedHeadSha,
+        prepared.treeSha
+      );
+      return proposalResult(prepared.pull.number, prepared.expectedHeadSha, branch, commit);
+    }
+
+    const created = await this.createGitCommit({
+      accessToken: input.accessToken,
+      message,
+      treeSha: prepared.treeSha,
+      parentSha: prepared.expectedHeadSha,
+    });
+    try {
+      const refResponse = await this.apiJson(`/repos/${PINNED_GITHUB_REPOSITORY}/git/refs`, input.accessToken, {
+        method: 'POST',
+        body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: created.data.sha }),
+      });
+      const ref = GitReferenceResponseSchema.safeParse(refResponse);
+      if (!ref.success || ref.data.object.sha !== created.data.sha) {
+        throw new GitHubIntegrationError('invalid_response');
+      }
+      return proposalResult(prepared.pull.number, prepared.expectedHeadSha, branch, created.data);
+    } catch (error) {
+      if (!(error instanceof GitHubIntegrationError && error.code === 'conflict')) throw error;
+      const racedHead = await this.readBranchHead(input.accessToken, branch);
+      if (racedHead === null) throw error;
+      const reconciled = await this.validateProposalCommit(
+        input.accessToken,
+        racedHead,
+        prepared.expectedHeadSha,
+        prepared.treeSha
+      );
+      return proposalResult(prepared.pull.number, prepared.expectedHeadSha, branch, reconciled);
+    }
+  }
+
+  private async buildValidatedTree(input: {
+    accessToken: string;
+    pullRequestNumber: number;
+    validatedPatch: ValidatedPatch;
+    approvedExpectedHeadSha: string;
+    approvedPatchDigest: string;
+    expectedFiles: ExpectedFileVersion[];
+  }): Promise<{ pull: ValidatedPullRequest; expectedHeadSha: string; treeSha: string }> {
+    validateAccessToken(input.accessToken);
     const approvedExpectedHeadSha = parseRequestedCommitSha(input.approvedExpectedHeadSha);
     const digestResult = z
       .string()
       .regex(/^sha256:[0-9a-f]{64}$/)
       .safeParse(input.approvedPatchDigest);
     if (!digestResult.success) throw new GitHubIntegrationError('invalid_request');
-    const approvedPatchDigest = digestResult.data;
     let validatedPatch: ValidatedPatch;
     try {
       validatedPatch = validatePatchCandidate({
@@ -466,7 +572,7 @@ export class GitHubAppClient {
       !verifyPatchApproval({
         patch: validatedPatch.bytes,
         requestedPatchDigest: validatedPatch.digest,
-        approvedPatchDigest,
+        approvedPatchDigest: digestResult.data,
         expectedHeadSha: validatedPatch.gate.expectedHeadSha,
         approvedHeadSha: approvedExpectedHeadSha,
       })
@@ -491,25 +597,20 @@ export class GitHubAppClient {
       expectedHeadSha: approvedExpectedHeadSha,
     });
     await this.assertBranchHead(input.accessToken, initialPull.headRef, approvedExpectedHeadSha);
-
     const commitResponse = await this.apiJson(
       `/repos/${PINNED_GITHUB_REPOSITORY}/git/commits/${approvedExpectedHeadSha}`,
       input.accessToken,
       { method: 'GET' }
     );
     const baseCommit = GitCommitResponseSchema.safeParse(commitResponse);
-    if (!baseCommit.success || baseCommit.data.tree === undefined) {
-      throw new GitHubIntegrationError('invalid_response');
-    }
+    if (!baseCommit.success || baseCommit.data.tree === undefined) throw new GitHubIntegrationError('invalid_response');
     const treeResponse = await this.apiJson(
       `/repos/${PINNED_GITHUB_REPOSITORY}/git/trees/${baseCommit.data.tree.sha}?recursive=1`,
       input.accessToken,
       { method: 'GET' }
     );
     const baseTree = GitTreeResponseSchema.safeParse(treeResponse);
-    if (!baseTree.success || baseTree.data.truncated) {
-      throw new GitHubIntegrationError('invalid_response');
-    }
+    if (!baseTree.success || baseTree.data.truncated) throw new GitHubIntegrationError('invalid_response');
     const treeEntries = new Map(baseTree.data.tree.map((entry) => [entry.path, entry]));
     compareExpectedTree(expectedFiles, treeEntries);
 
@@ -541,9 +642,7 @@ export class GitHubAppClient {
         });
         continue;
       }
-      if (after === null || after.byteLength > MAX_FILE_BYTES) {
-        throw new GitHubIntegrationError('unsafe_change');
-      }
+      if (after === null || after.byteLength > MAX_FILE_BYTES) throw new GitHubIntegrationError('unsafe_change');
       const blobResponse = await this.apiJson(`/repos/${PINNED_GITHUB_REPOSITORY}/git/blobs`, input.accessToken, {
         method: 'POST',
         body: JSON.stringify({ content: after.toString('base64'), encoding: 'base64' }),
@@ -566,7 +665,6 @@ export class GitHubAppClient {
     if (!createdTree.success || createdTree.data.sha === baseTree.data.sha) {
       throw new GitHubIntegrationError('unsafe_change');
     }
-
     const currentPull = await this.getValidatedPullRequest({
       accessToken: input.accessToken,
       pullRequestNumber: input.pullRequestNumber,
@@ -574,42 +672,54 @@ export class GitHubAppClient {
     });
     if (currentPull.headRef !== initialPull.headRef) throw new GitHubIntegrationError('head_changed');
     await this.assertBranchHead(input.accessToken, currentPull.headRef, approvedExpectedHeadSha);
+    return { pull: currentPull, expectedHeadSha: approvedExpectedHeadSha, treeSha: createdTree.data.sha };
+  }
 
-    const createdCommitResponse = await this.apiJson(
-      `/repos/${PINNED_GITHUB_REPOSITORY}/git/commits`,
-      input.accessToken,
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          message,
-          tree: createdTree.data.sha,
-          parents: [approvedExpectedHeadSha],
-        }),
-      }
-    );
-    const createdCommit = GitCommitResponseSchema.safeParse(createdCommitResponse);
-    if (!createdCommit.success) throw new GitHubIntegrationError('invalid_response');
+  private async createGitCommit(input: { accessToken: string; message: string; treeSha: string; parentSha: string }) {
+    const response = await this.apiJson(`/repos/${PINNED_GITHUB_REPOSITORY}/git/commits`, input.accessToken, {
+      method: 'POST',
+      body: JSON.stringify({ message: input.message, tree: input.treeSha, parents: [input.parentSha] }),
+    });
+    const commit = GitCommitResponseSchema.safeParse(response);
+    if (!commit.success) throw new GitHubIntegrationError('invalid_response');
+    return commit;
+  }
 
-    await this.assertBranchHead(input.accessToken, currentPull.headRef, approvedExpectedHeadSha);
-    const updateResponse = await this.apiJson(
-      `/repos/${PINNED_GITHUB_REPOSITORY}/git/refs/heads/${encodeBranch(currentPull.headRef)}`,
-      input.accessToken,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ sha: createdCommit.data.sha, force: false }),
-      }
-    );
-    const updatedRef = GitReferenceResponseSchema.safeParse(updateResponse);
-    if (!updatedRef.success || updatedRef.data.object.sha !== createdCommit.data.sha) {
-      throw new GitHubIntegrationError('invalid_response');
+  private async readBranchHead(accessToken: string, branch: string): Promise<string | null> {
+    try {
+      const response = await this.apiJson(
+        `/repos/${PINNED_GITHUB_REPOSITORY}/git/ref/heads/${encodeBranch(branch)}`,
+        accessToken,
+        { method: 'GET' }
+      );
+      const reference = GitReferenceResponseSchema.safeParse(response);
+      if (!reference.success) throw new GitHubIntegrationError('invalid_response');
+      return reference.data.object.sha;
+    } catch (error) {
+      if (error instanceof GitHubIntegrationError && error.code === 'not_found') return null;
+      throw error;
     }
-    return {
-      repository: PINNED_GITHUB_REPOSITORY,
-      pullRequestNumber: currentPull.number,
-      previousHeadSha: approvedExpectedHeadSha,
-      commitSha: createdCommit.data.sha,
-      commitUrl: createdCommit.data.html_url ?? null,
-    };
+  }
+
+  private async validateProposalCommit(
+    accessToken: string,
+    commitSha: string,
+    expectedParentSha: string,
+    expectedTreeSha: string
+  ) {
+    const response = await this.apiJson(`/repos/${PINNED_GITHUB_REPOSITORY}/git/commits/${commitSha}`, accessToken, {
+      method: 'GET',
+    });
+    const commit = GitCommitResponseSchema.safeParse(response);
+    if (
+      !commit.success ||
+      commit.data.tree?.sha !== expectedTreeSha ||
+      commit.data.parents?.length !== 1 ||
+      commit.data.parents[0]?.sha !== expectedParentSha
+    ) {
+      throw new GitHubIntegrationError('conflict');
+    }
+    return commit.data;
   }
 
   private async assertBranchHead(accessToken: string, branch: string, expectedSha: string): Promise<void> {
@@ -933,6 +1043,22 @@ function modeForEntry(mode: string | undefined): '100644' | '100755' {
   if (mode === undefined || mode === '100644') return '100644';
   if (mode === '100755') return '100755';
   throw new GitHubIntegrationError('unsafe_change');
+}
+
+function proposalResult(
+  pullRequestNumber: number,
+  previousHeadSha: string,
+  branch: string,
+  commit: z.infer<typeof GitCommitResponseSchema>
+): CreatedProposal {
+  return {
+    repository: PINNED_GITHUB_REPOSITORY,
+    pullRequestNumber,
+    previousHeadSha,
+    branch,
+    commitSha: commit.sha,
+    commitUrl: commit.html_url ?? null,
+  };
 }
 
 function validateTextBytes(bytes: Buffer): void {

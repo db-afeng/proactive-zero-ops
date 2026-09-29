@@ -11,6 +11,7 @@ import {
   type OmnigentSessionView,
 } from '../persistence/repository';
 import { Aes256GcmCipher } from '../security/encryption';
+import { validatePatchCandidate } from '../security/patch-policy';
 import { FixService } from './fix-service';
 
 const HEAD_SHA = 'a'.repeat(40);
@@ -184,6 +185,85 @@ describe('FixService failure handling', () => {
       })
     ).resolves.toEqual(failed);
     expect(getPull).not.toHaveBeenCalled();
+  });
+
+  it('publishes the validated patch on a deterministic proposal branch before completion', async () => {
+    const validating = session('validating', 'Validating.', 'provider-session');
+    const complete = session('complete', 'Validated patch ready for review.', 'provider-session');
+    const path = 'src/lineage/check.py';
+    const controlled = validatePatchCandidate({
+      gate: {
+        baseRepository: pull.repository,
+        headRepository: pull.repository,
+        isFork: false,
+        pullRequestState: 'open',
+        canPush: true,
+        force: false,
+        commitStrategy: 'normal',
+        expectedHeadSha: HEAD_SHA,
+        observedHeadSha: HEAD_SHA,
+      },
+      files: [
+        {
+          beforePath: path,
+          afterPath: path,
+          binary: false,
+          generated: false,
+          beforeType: 'regular',
+          afterType: 'regular',
+        },
+      ],
+      patch: [
+        `diff --git a/${path} b/${path}`,
+        `--- a/${path}`,
+        `+++ b/${path}`,
+        '@@ -1 +1 @@',
+        '-old',
+        '+new',
+        '',
+      ].join('\n'),
+    });
+    const repository = testRepository();
+    vi.spyOn(repository, 'getFixProposalForSession').mockResolvedValue(null);
+    vi.spyOn(repository, 'loadDecryptedValidatedPatchForSession').mockResolvedValue({
+      id: '22222222-2222-4222-8222-222222222222',
+      sessionId: validating.id,
+      expectedHeadSha: HEAD_SHA,
+      patchDigest: controlled.digest,
+      files: controlled.files,
+      createdAt: '2026-09-29T00:00:00.000Z',
+      bytes: controlled.bytes,
+      expectedFiles: [{ path, expectedBlobSha: 'd'.repeat(40) }],
+    });
+    const storeProposal = vi.spyOn(repository, 'storeFixProposal').mockResolvedValue({
+      sessionId: validating.id,
+      repository: pull.repository,
+      branch: 'omnigent/pr-42/11111111',
+      commitSha: 'e'.repeat(40),
+      commitUrl: 'https://github.com/db-afeng/proactive-zero-ops/commit/example',
+      createdAt: '2026-09-29T00:01:00.000Z',
+    });
+    vi.spyOn(repository, 'transitionOmnigentSession').mockResolvedValue(complete);
+    const github = testGitHub();
+    const createProposal = vi.spyOn(github, 'createProposalCommitFromValidatedPatch').mockResolvedValue({
+      repository: pull.repository,
+      pullRequestNumber: 42,
+      previousHeadSha: HEAD_SHA,
+      branch: 'omnigent/pr-42/11111111',
+      commitSha: 'e'.repeat(40),
+      commitUrl: 'https://github.com/db-afeng/proactive-zero-ops/commit/example',
+    });
+    const service = new FixService(repository, github, testOmnigent());
+
+    await expect(
+      service.publishProposalAndComplete({ actorSubject: ACTOR, assessment, credential }, validating)
+    ).resolves.toEqual(complete);
+    expect(createProposal).toHaveBeenCalledWith(
+      expect.objectContaining({ branch: 'omnigent/pr-42/11111111', expectedHeadSha: HEAD_SHA })
+    );
+    expect(storeProposal).toHaveBeenCalledWith(
+      expect.objectContaining({ branch: 'omnigent/pr-42/11111111', commitSha: 'e'.repeat(40) })
+    );
   });
 });
 

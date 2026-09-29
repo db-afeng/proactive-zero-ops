@@ -14,9 +14,7 @@ import {
   EmptyTitle,
   Progress,
   ScrollArea,
-  Separator,
   Skeleton,
-  Textarea,
   useIsMobile,
 } from '@databricks/appkit-ui/react';
 import {
@@ -25,12 +23,11 @@ import {
   CheckCircle2,
   CircleAlert,
   CircleDashed,
-  Code2,
+  Clipboard,
   ExternalLink,
   FileCode2,
   Github,
   Link2Off,
-  LoaderCircle,
   RotateCw,
   ShieldAlert,
   XCircle,
@@ -41,11 +38,8 @@ import { useEffect, useRef, useState } from 'react';
 import { MonacoDiff } from '@/components/MonacoDiff';
 import {
   ApiRequestError,
-  approvePatch,
-  cancelFixSession,
-  commitPatch,
-  createFixSession,
   disconnectGitHub,
+  getAssessmentFixSession,
   getCapabilities,
   getFixSession,
   getGitHubStatus,
@@ -55,7 +49,6 @@ import {
 import type {
   AssessmentViewV3,
   Capabilities,
-  CommitOutcome,
   FixSession,
   GitHubConnection,
   PatchFile,
@@ -71,18 +64,15 @@ type Loadable<T> =
 
 type ProgressUpdateState = 'idle' | 'connecting' | 'connected' | 'disconnected';
 
-const GUIDANCE_LIMIT = 1200;
-
 export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; active: boolean }) {
   const [github, setGitHub] = useState<Loadable<GitHubConnection>>({ kind: 'idle' });
   const [capabilities, setCapabilities] = useState<Loadable<Capabilities>>({ kind: 'idle' });
   const [prerequisiteRetry, setPrerequisiteRetry] = useState(0);
-  const [guidance, setGuidance] = useState('');
+  const [sessionLookup, setSessionLookup] = useState<Loadable<FixSession | null>>({ kind: 'idle' });
+  const [sessionLookupRetry, setSessionLookupRetry] = useState(0);
   const [session, setSession] = useState<FixSession>();
   const [patch, setPatch] = useState<Loadable<ValidatedPatch>>({ kind: 'idle' });
   const [selectedPath, setSelectedPath] = useState<string>();
-  const [approvedAt, setApprovedAt] = useState<string>();
-  const [commitOutcome, setCommitOutcome] = useState<CommitOutcome>();
   const [actionPending, setActionPending] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const [permissionLost, setPermissionLost] = useState(false);
@@ -122,6 +112,25 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
     return () => controller.abort();
   }, [active, prerequisiteRetry]);
 
+  useEffect(() => {
+    if (!active) return;
+    const controller = new AbortController();
+    setSessionLookup({ kind: 'loading' });
+    void getAssessmentFixSession(assessment.reference, controller.signal)
+      .then((value) => {
+        setSession(value ?? undefined);
+        setSessionLookup({ kind: 'ready', value });
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setSessionLookup({
+          kind: 'error',
+          message: error instanceof Error ? error.message : 'The automatic fix status could not be loaded.',
+        });
+      });
+    return () => controller.abort();
+  }, [active, assessment.reference, assessment.pullRequest.headSha, sessionLookupRetry]);
+
   const shouldPoll = active && session !== undefined && !isTerminalSession(session.status) && !permissionLost;
   const { updateState, retry } = useFixPolling(
     session?.id,
@@ -153,53 +162,7 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
     return () => controller.abort();
   }, [active, session?.id, session?.status]);
 
-  const githubConnection = github.kind === 'ready' ? github.value : undefined;
   const omnigent = capabilities.kind === 'ready' ? capabilities.value.omnigent : undefined;
-  const prerequisitesLoading =
-    github.kind === 'idle' ||
-    github.kind === 'loading' ||
-    capabilities.kind === 'idle' ||
-    capabilities.kind === 'loading';
-  const canStart =
-    guidance.trim().length > 0 &&
-    githubConnection?.connected === true &&
-    omnigent?.available === true &&
-    assessment.source.freshness === 'current' &&
-    !actionPending &&
-    !permissionLost;
-
-  async function startSession() {
-    if (!canStart) return;
-    setActionPending(true);
-    setActionError(undefined);
-    setStaleHead(false);
-    setPermissionLost(false);
-    setPatch({ kind: 'idle' });
-    setApprovedAt(undefined);
-    setCommitOutcome(undefined);
-    try {
-      const created = await createFixSession(assessment.reference, guidance.trim(), assessment.pullRequest.headSha);
-      setSession(created);
-    } catch (error) {
-      handleScopedError(error, setPermissionLost, setStaleHead, setActionError);
-    } finally {
-      setActionPending(false);
-    }
-  }
-
-  async function cancelSession() {
-    if (!session) return;
-    setActionPending(true);
-    setActionError(undefined);
-    try {
-      setSession(await cancelFixSession(session.id));
-    } catch (error) {
-      handleScopedError(error, setPermissionLost, setStaleHead, setActionError);
-    } finally {
-      setActionPending(false);
-    }
-  }
-
   async function disconnect() {
     setActionPending(true);
     setActionError(undefined);
@@ -213,17 +176,6 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
     }
   }
 
-  function resetSession() {
-    setSession(undefined);
-    setPatch({ kind: 'idle' });
-    setSelectedPath(undefined);
-    setApprovedAt(undefined);
-    setCommitOutcome(undefined);
-    setActionError(undefined);
-    setPermissionLost(false);
-    setStaleHead(false);
-  }
-
   return (
     <section aria-labelledby="fix-title" className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -232,8 +184,8 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
             Propose a fix
           </h1>
           <p className="mt-1 max-w-[72ch] text-sm leading-6 text-muted-foreground">
-            Omnigent receives only evidence authorized for your Databricks identity. Execution uses your identity when
-            available and otherwise the app service principal; generated code is validated before approval or commit.
+            A failed GitHub check starts Omnigent automatically in the app service principal&apos;s isolated sandbox.
+            Generated changes are validated and committed to a separate proposal branch before they appear here.
           </p>
         </div>
         <GitHubConnectionControl
@@ -283,102 +235,73 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
       ) : null}
 
       {!session ? (
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-10">
-          <div className="space-y-3">
-            <label htmlFor="fix-guidance" className="text-sm font-medium">
-              Guidance for Omnigent
-            </label>
-            <Textarea
-              id="fix-guidance"
-              value={guidance}
-              maxLength={GUIDANCE_LIMIT}
-              rows={5}
-              disabled={!omnigent?.available || permissionLost}
-              onChange={(event) => setGuidance(event.target.value)}
-              placeholder="Describe the intended behavior, constraints, or preferred implementation approach."
-              aria-describedby="fix-guidance-help"
-            />
-            <div
-              id="fix-guidance-help"
-              className="flex items-start justify-between gap-4 text-xs text-muted-foreground"
-            >
-              <p className="max-w-[65ch]">
-                Do not include secrets. Repository content and authorized assessment evidence are supplied by the
-                server.
-              </p>
-              <span className="shrink-0 tabular-nums">
-                {guidance.length}/{GUIDANCE_LIMIT}
-              </span>
-            </div>
-            <Button
-              onClick={() => void startSession()}
-              disabled={!canStart}
-              aria-describedby={!canStart ? 'fix-start-requirements' : undefined}
-            >
-              {actionPending ? (
-                <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" />
-              ) : (
-                <Code2 aria-hidden="true" />
-              )}
-              Generate fix
-            </Button>
-            {!canStart ? (
-              <p id="fix-start-requirements" className="text-xs text-muted-foreground">
-                {startRequirement(
-                  prerequisitesLoading,
-                  githubConnection,
-                  omnigent,
-                  assessment.source.freshness,
-                  guidance
-                )}
-              </p>
-            ) : null}
-          </div>
-
-          <aside className="border-t border-border pt-5 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
-            <h2 className="text-sm font-semibold">Safety boundary</h2>
-            <ul className="mt-3 space-y-3 text-sm leading-6 text-muted-foreground">
-              <li>Uses an isolated checkout of the assessed PR head.</li>
-              <li>Never executes commands supplied by the pull request.</li>
-              <li>Rejects protected paths, forks, binary files, and stale heads.</li>
-              <li>Creates at most one normal commit after explicit approval.</li>
-            </ul>
-          </aside>
-        </div>
+        <AutomaticFixLookup state={sessionLookup} onRetry={() => setSessionLookupRetry((value) => value + 1)} />
       ) : (
         <div className="space-y-6">
-          <SessionProgress
-            session={session}
-            updateState={updateState}
-            actionPending={actionPending}
-            onCancel={() => void cancelSession()}
-            onRetry={retry}
-            onReset={resetSession}
-          />
+          <SessionProgress session={session} updateState={updateState} onRetry={retry} />
 
           {session.status === 'complete' ? (
             <PatchArea
               patch={patch}
               selectedPath={selectedPath}
-              approvedAt={approvedAt ?? session.approvedAt}
-              commitOutcome={commitOutcome}
-              actionPending={actionPending}
-              permissionLost={permissionLost}
-              staleHead={staleHead}
               repository={assessment.pullRequest.repository}
-              expectedHeadSha={assessment.pullRequest.headSha}
               onSelectPath={setSelectedPath}
-              onApproval={(value) => setApprovedAt(value)}
-              onCommitOutcome={setCommitOutcome}
-              onActionPending={setActionPending}
-              onPermissionLost={setPermissionLost}
-              onStaleHead={setStaleHead}
-              onError={setActionError}
             />
           ) : null}
         </div>
       )}
     </section>
+  );
+}
+
+function AutomaticFixLookup({ state, onRetry }: { state: Loadable<FixSession | null>; onRetry: () => void }) {
+  if (state.kind === 'idle' || state.kind === 'loading') {
+    return (
+      <Card aria-busy="true" className="shadow-none">
+        <CardHeader>
+          <CardTitle>Loading automatic fix</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Skeleton className="h-4 w-4/5" />
+          <Skeleton className="h-4 w-3/5" />
+          <span className="sr-only">Looking for the fix started by the failed GitHub check</span>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (state.kind === 'error') {
+    return (
+      <Alert variant="destructive">
+        <AlertCircle aria-hidden="true" />
+        <AlertTitle>Automatic fix status could not be loaded</AlertTitle>
+        <AlertDescription className="space-y-3">
+          <p>{state.message}</p>
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            <RotateCw aria-hidden="true" />
+            Retry
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  return (
+    <Empty className="min-h-56 border border-border">
+      <EmptyHeader>
+        <EmptyMedia>
+          <CircleDashed className="size-5 text-muted-foreground" aria-hidden="true" />
+        </EmptyMedia>
+        <EmptyTitle>Waiting for the failed GitHub check</EmptyTitle>
+        <EmptyDescription>
+          A blocking downstream-impact check starts the isolated Omnigent proposal automatically.
+        </EmptyDescription>
+      </EmptyHeader>
+      <Button variant="outline" size="sm" onClick={onRetry}>
+        <RotateCw aria-hidden="true" />
+        Check again
+      </Button>
+    </Empty>
   );
 }
 
@@ -436,17 +359,11 @@ function GitHubConnectionControl({
 function SessionProgress({
   session,
   updateState,
-  actionPending,
-  onCancel,
   onRetry,
-  onReset,
 }: {
   session: FixSession;
   updateState: ProgressUpdateState;
-  actionPending: boolean;
-  onCancel: () => void;
   onRetry: () => void;
-  onReset: () => void;
 }) {
   const progress = session.progress ?? defaultProgress(session.status);
   const active = !isTerminalSession(session.status);
@@ -462,15 +379,6 @@ function SessionProgress({
             {session.message ?? sessionStatusMessage(session.status)}
           </p>
         </div>
-        {active ? (
-          <Button variant="outline" size="sm" disabled={actionPending} onClick={onCancel}>
-            Cancel
-          </Button>
-        ) : session.status === 'failed' || session.status === 'cancelled' ? (
-          <Button variant="outline" size="sm" onClick={onReset}>
-            Start over
-          </Button>
-        ) : null}
       </div>
 
       {active ? (
@@ -516,37 +424,13 @@ function SessionProgress({
 function PatchArea({
   patch,
   selectedPath,
-  approvedAt,
-  commitOutcome,
-  actionPending,
-  permissionLost,
-  staleHead,
   repository,
-  expectedHeadSha,
   onSelectPath,
-  onApproval,
-  onCommitOutcome,
-  onActionPending,
-  onPermissionLost,
-  onStaleHead,
-  onError,
 }: {
   patch: Loadable<ValidatedPatch>;
   selectedPath?: string;
-  approvedAt?: string;
-  commitOutcome?: CommitOutcome;
-  actionPending: boolean;
-  permissionLost: boolean;
-  staleHead: boolean;
   repository: string;
-  expectedHeadSha: string;
   onSelectPath: (path: string) => void;
-  onApproval: (approvedAt: string) => void;
-  onCommitOutcome: (outcome: CommitOutcome) => void;
-  onActionPending: (pending: boolean) => void;
-  onPermissionLost: (lost: boolean) => void;
-  onStaleHead: (stale: boolean) => void;
-  onError: (message?: string) => void;
 }) {
   if (patch.kind === 'idle' || patch.kind === 'loading') {
     return (
@@ -585,85 +469,27 @@ function PatchArea({
   const selectedFile = patch.value.files.find((file) => file.path === selectedPath) ?? patch.value.files[0];
 
   return (
-    <PatchReview
-      patch={patch.value}
-      selectedFile={selectedFile}
-      approvedAt={approvedAt}
-      commitOutcome={commitOutcome}
-      actionPending={actionPending}
-      permissionLost={permissionLost}
-      staleHead={staleHead}
-      repository={repository}
-      expectedHeadSha={expectedHeadSha}
-      onSelectPath={onSelectPath}
-      onApproval={onApproval}
-      onCommitOutcome={onCommitOutcome}
-      onActionPending={onActionPending}
-      onPermissionLost={onPermissionLost}
-      onStaleHead={onStaleHead}
-      onError={onError}
-    />
+    <PatchReview patch={patch.value} selectedFile={selectedFile} repository={repository} onSelectPath={onSelectPath} />
   );
 }
 
 function PatchReview({
   patch,
   selectedFile,
-  approvedAt,
-  commitOutcome,
-  actionPending,
-  permissionLost,
-  staleHead,
   repository,
-  expectedHeadSha,
   onSelectPath,
-  onApproval,
-  onCommitOutcome,
-  onActionPending,
-  onPermissionLost,
-  onStaleHead,
-  onError,
 }: {
   patch: ValidatedPatch;
   selectedFile: PatchFile;
-  approvedAt?: string;
-  commitOutcome?: CommitOutcome;
-  actionPending: boolean;
-  permissionLost: boolean;
-  staleHead: boolean;
   repository: string;
-  expectedHeadSha: string;
   onSelectPath: (path: string) => void;
-  onApproval: (approvedAt: string) => void;
-  onCommitOutcome: (outcome: CommitOutcome) => void;
-  onActionPending: (pending: boolean) => void;
-  onPermissionLost: (lost: boolean) => void;
-  onStaleHead: (stale: boolean) => void;
-  onError: (message?: string) => void;
 }) {
   const theme = useMonacoTheme();
   const isMobile = useIsMobile();
-  const validationsPassed = patch.validations.every((item) => item.status === 'passed');
-
-  async function approveOrCommit() {
-    onActionPending(true);
-    onError(undefined);
-    try {
-      if (!approvedAt) {
-        const result = await approvePatch(patch.sessionId, patch.patchDigest, expectedHeadSha);
-        onApproval(result.approvedAt ?? new Date().toISOString());
-      } else {
-        onCommitOutcome(await commitPatch(patch.sessionId, patch.patchDigest, expectedHeadSha));
-      }
-    } catch (error) {
-      handleScopedError(error, onPermissionLost, onStaleHead, onError);
-    } finally {
-      onActionPending(false);
-    }
-  }
 
   return (
     <div className="space-y-6">
+      <ProposalSummary proposal={patch.proposal} repository={repository} baseSha={patch.baseSha} />
       <div className="grid gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
         <aside className="min-w-0 space-y-5">
           <section aria-labelledby="changed-files-title">
@@ -720,82 +546,129 @@ function PatchReview({
           </CardContent>
         </Card>
       </div>
+    </div>
+  );
+}
 
-      <Separator />
+function ProposalSummary({
+  proposal,
+  repository,
+  baseSha,
+}: {
+  proposal: ValidatedPatch['proposal'];
+  repository: string;
+  baseSha: string;
+}) {
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
 
-      <section aria-labelledby="approval-title" className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto]">
-        <div className="min-w-0">
-          <h2 id="approval-title" className="text-base font-semibold">
-            Approval boundary
-          </h2>
-          <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="text-xs text-muted-foreground">Expected PR head</dt>
-              <dd className="mt-1 break-all font-mono text-xs">{expectedHeadSha}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Patch digest</dt>
-              <dd className="mt-1 break-all font-mono text-xs">{patch.patchDigest}</dd>
-            </div>
-          </dl>
-          {approvedAt ? (
-            <p className="mt-3 flex items-center gap-2 text-sm text-success">
-              <CheckCircle2 className="size-4" aria-hidden="true" />
-              Approved {formatDateTime(approvedAt)}
-            </p>
-          ) : null}
-        </div>
+  if (proposal === null) {
+    return (
+      <Alert className="border-warning/50">
+        <CircleAlert className="text-warning-foreground" aria-hidden="true" />
+        <AlertTitle>Proposal commit is not available</AlertTitle>
+        <AlertDescription>
+          The validated diff is available, but its isolated Git branch was not recorded.
+        </AlertDescription>
+      </Alert>
+    );
+  }
 
-        <div className="flex items-end">
-          <Button
-            onClick={() => void approveOrCommit()}
-            disabled={!validationsPassed || actionPending || permissionLost || staleHead || commitOutcome !== undefined}
-          >
-            {actionPending ? (
-              <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" />
-            ) : approvedAt ? (
-              <Github aria-hidden="true" />
-            ) : (
-              <CheckCircle2 aria-hidden="true" />
-            )}
-            {commitOutcome ? 'Commit recorded' : approvedAt ? 'Commit approved patch' : 'Approve this patch'}
-          </Button>
-        </div>
-      </section>
+  const command = `git cherry-pick ${proposal.commitSha}`;
 
-      {!validationsPassed ? (
-        <Alert variant="destructive">
-          <ShieldAlert aria-hidden="true" />
-          <AlertTitle>Patch cannot be approved</AlertTitle>
-          <AlertDescription>
-            Every server-side policy and content validation must pass before approval.
-          </AlertDescription>
-        </Alert>
-      ) : null}
+  async function copyCommand() {
+    setCopyState('idle');
+    try {
+      if (!copyWithSelection(command)) await copyWithClipboardApi(command);
+      setCopyState('copied');
+    } catch {
+      setCopyState('error');
+    }
+  }
 
-      {commitOutcome ? (
-        <Alert className="border-success/40">
-          <CheckCircle2 className="text-success" aria-hidden="true" />
-          <AlertTitle>{commitOutcome.message ?? 'Commit completed'}</AlertTitle>
-          <AlertDescription>
-            {commitOutcome.commitSha ? (
+  return (
+    <Card className="border-success/40 shadow-none">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <CheckCircle2 className="size-4 text-success" aria-hidden="true" />
+          Isolated proposal ready
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Omnigent based this commit on the assessed PR head and published it without changing the PR branch.
+        </p>
+        <dl className="grid gap-3 text-sm sm:grid-cols-3">
+          <div className="min-w-0">
+            <dt className="text-xs text-muted-foreground">Proposal branch</dt>
+            <dd className="mt-1 break-all font-mono text-xs">{proposal.branch}</dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-xs text-muted-foreground">Proposal commit</dt>
+            <dd className="mt-1">
               <a
-                href={`https://github.com/${repository}/commit/${commitOutcome.commitSha}`}
+                href={proposal.commitUrl ?? `https://github.com/${repository}/commit/${proposal.commitSha}`}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 font-mono text-xs underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                {commitOutcome.commitSha}
+                {proposal.commitSha.slice(0, 12)}
                 <ExternalLink className="size-3" aria-hidden="true" />
               </a>
-            ) : (
-              commitOutcome.outcome
-            )}
-          </AlertDescription>
-        </Alert>
-      ) : null}
-    </div>
+            </dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-xs text-muted-foreground">Based on PR head</dt>
+            <dd className="mt-1 break-all font-mono text-xs">{baseSha.slice(0, 12)}</dd>
+          </div>
+        </dl>
+        <div className="flex flex-wrap items-center gap-3">
+          <code className="max-w-full overflow-x-auto rounded-sm bg-muted px-2.5 py-1.5 text-xs">{command}</code>
+          <Button variant="outline" size="sm" onClick={() => void copyCommand()}>
+            <Clipboard aria-hidden="true" />
+            {copyState === 'copied' ? 'Copied' : 'Copy cherry-pick command'}
+          </Button>
+          <span className="text-xs text-muted-foreground" aria-live="polite">
+            {copyState === 'copied'
+              ? 'Cherry-pick command copied to clipboard.'
+              : copyState === 'error'
+                ? 'Clipboard access failed. Copy the command manually.'
+                : ''}
+          </span>
+        </div>
+      </CardContent>
+    </Card>
   );
+}
+
+function copyWithSelection(value: string): boolean {
+  const field = document.createElement('textarea');
+  field.value = value;
+  field.readOnly = true;
+  field.style.position = 'fixed';
+  field.style.left = '-9999px';
+  field.style.top = '0';
+  document.body.append(field);
+  field.focus({ preventScroll: true });
+  field.select();
+  field.setSelectionRange(0, value.length);
+  let copied = false;
+  try {
+    copied = document.execCommand('copy');
+  } finally {
+    field.remove();
+  }
+  return copied;
+}
+
+async function copyWithClipboardApi(value: string): Promise<void> {
+  if (navigator.clipboard === undefined) throw new Error('Clipboard API is unavailable.');
+
+  await Promise.race([
+    navigator.clipboard.writeText(value),
+    new Promise<never>((_resolve, reject) => {
+      window.setTimeout(() => reject(new Error('Clipboard write timed out.')), 1_500);
+    }),
+  ]);
 }
 
 function ValidationRow({ validation }: { validation: PatchValidation }) {
@@ -878,21 +751,6 @@ function useMonacoTheme() {
   return resolvedTheme === 'dark' ? 'vs-dark' : 'light';
 }
 
-function startRequirement(
-  loading: boolean,
-  github: GitHubConnection | undefined,
-  omnigent: Capabilities['omnigent'] | undefined,
-  freshness: AssessmentViewV3['source']['freshness'],
-  guidance: string
-) {
-  if (loading) return 'Checking GitHub connection and workspace capabilities.';
-  if (freshness !== 'current') return 'A current assessment is required.';
-  if (!github?.connected) return 'Connect your GitHub identity to continue.';
-  if (!omnigent?.available) return omnigent?.reason ?? 'Omnigent is unavailable.';
-  if (!guidance.trim()) return 'Add short guidance for the proposed fix.';
-  return 'Fix generation is not available.';
-}
-
 function handleScopedError(
   error: unknown,
   setPermissionLost: (value: boolean) => void,
@@ -941,18 +799,9 @@ function sessionStatusMessage(status: FixSession['status']) {
     queued: 'Waiting for an isolated workspace.',
     running: 'Review will be available only after server-side validation.',
     validating: 'Checking protected paths, content types, and patch integrity.',
-    complete: 'Review every changed file before recording approval.',
-    failed: 'No commit was created.',
+    complete: 'The isolated proposal commit and validated diff are ready to inspect.',
+    failed: 'Re-run the GitHub check to start a fresh automatic proposal.',
     cancelled: 'No commit was created.',
   };
   return messages[status];
-}
-
-function formatDateTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(date);
 }

@@ -312,6 +312,63 @@ describe('pull-request commit gate', () => {
     const refUpdate = calls.find((call) => call.url.includes('/git/refs/heads/') && call.init.method === 'PATCH');
     expect(JSON.parse(bodyText(refUpdate?.init.body))).toEqual({ sha: COMMIT_SHA, force: false });
   });
+
+  it('publishes an automatic proposal on a separate branch without updating the PR ref', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const branch = 'omnigent/pr-4/11111111';
+    const responses = [
+      jsonResponse(pullResponse()),
+      jsonResponse(repositoryResponse()),
+      jsonResponse({ object: { sha: HEAD_SHA } }),
+      jsonResponse({ sha: HEAD_SHA, tree: { sha: BASE_TREE_SHA } }),
+      jsonResponse({
+        sha: BASE_TREE_SHA,
+        truncated: false,
+        tree: [{ path: PATH, mode: '100644', type: 'blob', sha: OLD_BLOB_SHA }],
+      }),
+      jsonResponse({ content: Buffer.from('old\n').toString('base64'), encoding: 'base64', size: 4 }),
+      jsonResponse({ sha: NEW_BLOB_SHA }),
+      jsonResponse({ sha: NEW_TREE_SHA }),
+      jsonResponse(pullResponse()),
+      jsonResponse(repositoryResponse()),
+      jsonResponse({ object: { sha: HEAD_SHA } }),
+      jsonResponse({ message: 'Not Found' }, 404),
+      jsonResponse({
+        sha: COMMIT_SHA,
+        tree: { sha: NEW_TREE_SHA },
+        parents: [{ sha: HEAD_SHA }],
+        html_url: 'https://github.com/commit/1',
+      }),
+      jsonResponse({ object: { sha: COMMIT_SHA } }),
+    ];
+    const fetchMock = vi.fn<typeof fetch>((url, init = {}) => {
+      calls.push({ url: requestUrl(url), init });
+      const response = responses.shift();
+      if (response === undefined) return Promise.reject(new Error('unexpected fetch'));
+      return Promise.resolve(response);
+    });
+    const patch = validatedPatch();
+
+    const result = await client(fetchMock).createProposalCommitFromValidatedPatch({
+      accessToken: TOKEN,
+      pullRequestNumber: 4,
+      validatedPatch: patch,
+      expectedHeadSha: HEAD_SHA,
+      patchDigest: patch.digest,
+      expectedFiles: [{ path: PATH, expectedBlobSha: OLD_BLOB_SHA }],
+      branch,
+      message: 'Propose downstream lineage fix',
+    });
+
+    expect(result).toMatchObject({ branch, commitSha: COMMIT_SHA, previousHeadSha: HEAD_SHA });
+    expect(responses).toHaveLength(0);
+    expect(calls.some((call) => call.init.method === 'PATCH')).toBe(false);
+    const refCreate = calls.find((call) => call.url.endsWith('/git/refs') && call.init.method === 'POST');
+    expect(JSON.parse(bodyText(refCreate?.init.body))).toEqual({
+      ref: `refs/heads/${branch}`,
+      sha: COMMIT_SHA,
+    });
+  });
 });
 
 describe('source-evidence read gate', () => {
