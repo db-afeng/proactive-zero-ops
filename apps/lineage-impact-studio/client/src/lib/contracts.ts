@@ -146,6 +146,7 @@ export interface GitHubConnection {
 export interface Capabilities {
   omnigent: {
     available: boolean;
+    authorizationRequired?: boolean;
     authMode?: 'obo' | 'service-principal';
     reason?: string;
   };

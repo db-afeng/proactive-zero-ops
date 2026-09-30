@@ -1,0 +1,13 @@
+{
+  "name": "lineage-impact-studio-manual-fix",
+  "confidential": false,
+  "redirect_urls": [
+    "https://lineage-impact-studio-7474650525906616.aws.databricksapps.com/api/databricks/oauth/callback"
+  ],
+  "scopes": ["all-apis"],
+  "user_authorized_scopes": ["all-apis"],
+  "token_access_policy": {
+    "access_token_ttl_in_minutes": 60,
+    "refresh_token_ttl_in_minutes": 60
+  }
+}

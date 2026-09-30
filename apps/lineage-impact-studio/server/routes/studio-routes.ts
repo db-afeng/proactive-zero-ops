@@ -9,10 +9,14 @@ import {
   type AssessmentViewV3,
 } from '../domain/assessment-view';
 import { CommitShaSchema, parseAssessmentReference } from '../domain/identifiers';
+import { DatabricksFixOAuthClient, DatabricksFixOAuthError } from '../integrations/databricks/fix-oauth-client';
 import { GitHubAppClient } from '../integrations/github';
 import { GitHubIntegrationError } from '../integrations/github/errors';
 import { OmnigentClient, OmnigentIntegrationError } from '../integrations/omnigent';
-import { WorkspaceGitCredentialClient } from '../integrations/omnigent/git-credential-client';
+import {
+  UserWorkspaceGitCredentialClient,
+  WorkspaceGitCredentialClient,
+} from '../integrations/omnigent/git-credential-client';
 import {
   LineageImpactRepository,
   PersistenceError,
@@ -22,7 +26,7 @@ import {
 import { bootstrapLineageImpactStore, type QueryExecutor } from '../persistence/schema';
 import { Aes256GcmCipher, decodeBase64EncryptionKey } from '../security/encryption';
 import { issueOAuthAttempt, OAUTH_COOKIE_OPTIONS } from '../security/oauth';
-import { OboAuthorizationError, optionalOboAccessToken, requireOboRequest } from '../security/obo';
+import { OboAuthorizationError, optionalOboAccessToken, requireOboEmail, requireOboRequest } from '../security/obo';
 import { PatchPolicyError, validatePatchCandidate } from '../security/patch-policy';
 import {
   AssessmentService,
@@ -36,7 +40,14 @@ import { VolumeRestrictedEnvelopeReader, type VolumeReader } from '../services/r
 
 const OAUTH_BINDING_COOKIE = 'lineage_impact_oauth_binding';
 const OAUTH_RETURN_COOKIE = 'lineage_impact_oauth_return';
+const DATABRICKS_OAUTH_BINDING_COOKIE = 'lineage_impact_databricks_oauth_binding';
+const DATABRICKS_OAUTH_RETURN_COOKIE = 'lineage_impact_databricks_oauth_return';
+const DATABRICKS_OAUTH_COOKIE_OPTIONS = Object.freeze({
+  ...OAUTH_COOKIE_OPTIONS,
+  path: '/api/databricks/oauth',
+});
 const FIX_UNAVAILABLE_REASON = 'Fix generation could not authenticate to Omnigent from this app runtime.';
+const FIX_AUTH_REQUIRED_MESSAGE = 'Connect Databricks to authorize Omnigent as your user before starting a manual fix.';
 const AUTOMATION_ACTOR_PREFIX = 'github-check:';
 const AUTOMATIC_FIX_GUIDANCE =
   'Propose the smallest safe source change that resolves the failed downstream-impact check while preserving existing contracts.';
@@ -90,8 +101,10 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
     reader: new VolumeRestrictedEnvelopeReader(appkit.volume),
   });
   const oauth = optionalOAuthRuntime();
+  const databricksFixOAuth = DatabricksFixOAuthClient.fromEnvironment();
   const omnigent = OmnigentClient.fromEnvironment();
   const workspaceGitCredentials = WorkspaceGitCredentialClient.fromEnvironment();
+  const userGitCredentials = UserWorkspaceGitCredentialClient.fromEnvironment();
   const fixService =
     oauth !== null && omnigent !== null
       ? new FixService(repository, oauth.client, omnigent, workspaceGitCredentials)
@@ -108,14 +121,36 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
     setInterval(clean, 15 * 60 * 1000).unref();
   }
 
+  const cleanExpiredUserTokens = () => {
+    void repository.deleteExpiredDatabricksFixAuthorizations().catch(() => {
+      console.warn('Expired Databricks fix authorization cleanup will be retried.');
+    });
+  };
+  cleanExpiredUserTokens();
+  setInterval(cleanExpiredUserTokens, 15 * 60 * 1000).unref();
+
   appkit.server.extend((application) => {
     application.get('/api/capabilities', async (request, response) => {
       response.set('Cache-Control', 'private, no-store');
-      if (fixService === null || omnigent === null) {
+      let viewer;
+      try {
+        viewer = requireOboRequest(request);
+      } catch {
         response.json({ omnigent: { available: false, reason: FIX_UNAVAILABLE_REASON } });
         return;
       }
-      const capability = await omnigent.probe({ oboToken: optionalOboAccessToken(request) });
+      if (fixService === null || omnigent === null || userGitCredentials === null || databricksFixOAuth === null) {
+        response.json({ omnigent: { available: false, reason: FIX_UNAVAILABLE_REASON } });
+        return;
+      }
+      const userToken = await repository.loadActiveDatabricksFixToken(viewer.subject);
+      if (userToken === null) {
+        response.json({
+          omnigent: { available: false, authorizationRequired: true, reason: FIX_AUTH_REQUIRED_MESSAGE },
+        });
+        return;
+      }
+      const capability = await omnigent.probe({ oboToken: userToken, allowServicePrincipalFallback: false });
       response.json({ omnigent: capability });
     });
 
@@ -271,6 +306,75 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
       }
     });
 
+    application.get('/api/databricks/oauth/login', async (request, response) => {
+      try {
+        const viewer = requireOboRequest(request);
+        requireOboEmail(request);
+        if (databricksFixOAuth === null) {
+          sendUnavailable(response, 'Databricks authorization for manual fixes is not configured.');
+          return;
+        }
+        const returnTo = safeReturnPath(request.query.returnTo);
+        const binding = randomBytes(32).toString('base64url');
+        const attempt = issueOAuthAttempt({ binding });
+        await repository.createOAuthAttempt({ actorSubject: viewer.subject, record: attempt.record });
+        response.cookie(DATABRICKS_OAUTH_BINDING_COOKIE, binding, DATABRICKS_OAUTH_COOKIE_OPTIONS);
+        response.cookie(DATABRICKS_OAUTH_RETURN_COOKIE, returnTo, DATABRICKS_OAUTH_COOKIE_OPTIONS);
+        response.redirect(
+          302,
+          databricksFixOAuth.buildAuthorizeUrl({
+            state: attempt.state,
+            codeChallenge: attempt.codeChallenge,
+          })
+        );
+      } catch (error) {
+        sendRouteError(response, error);
+      }
+    });
+
+    application.get('/api/databricks/oauth/callback', async (request, response) => {
+      const returnTo = safeReturnPath(cookieValue(request, DATABRICKS_OAUTH_RETURN_COOKIE));
+      try {
+        const viewer = requireOboRequest(request);
+        const email = requireOboEmail(request);
+        if (databricksFixOAuth === null) throw new DatabricksFixOAuthError('invalid_configuration');
+        const state = singleQueryValue(request.query.state);
+        const code = singleQueryValue(request.query.code);
+        const binding = cookieValue(request, DATABRICKS_OAUTH_BINDING_COOKIE);
+        if (state === null || code === null || binding === null) throw new Error('invalid_oauth_callback');
+        const consumed = await repository.consumeOAuthAttempt({
+          actorSubject: viewer.subject,
+          submittedState: state,
+          binding,
+        });
+        const token = await databricksFixOAuth.exchangeCode({ code, codeVerifier: consumed.codeVerifier });
+        await databricksFixOAuth.verifyOmnigentIdentity(token.accessToken, email);
+        await repository.saveDatabricksFixAuthorization({
+          actorSubject: viewer.subject,
+          accessToken: token.accessToken,
+          expiresAt: token.expiresAt,
+        });
+        clearDatabricksOAuthCookies(response);
+        response.redirect(303, returnTo);
+      } catch (error) {
+        console.warn('[lineage-impact-studio] Databricks fix OAuth callback failed', {
+          code: oauthCallbackFailureCode(error),
+        });
+        clearDatabricksOAuthCookies(response);
+        response.redirect(303, fixAuthorizationFailurePath(returnTo));
+      }
+    });
+
+    application.post('/api/databricks/oauth/disconnect', async (request, response) => {
+      try {
+        const viewer = requireOboRequest(request);
+        await repository.disconnectDatabricksFixAuthorization(viewer.subject);
+        response.json({ connected: false });
+      } catch (error) {
+        sendRouteError(response, error);
+      }
+    });
+
     application.post('/api/assessments/:reference/fix-sessions', async (request, response) => {
       try {
         const viewer = requireOboRequest(request);
@@ -284,7 +388,12 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           });
           return;
         }
-        if (fixService === null || githubCredentials === null || workspaceGitCredentials === null) {
+        if (
+          fixService === null ||
+          githubCredentials === null ||
+          userGitCredentials === null ||
+          databricksFixOAuth === null
+        ) {
           sendUnavailable(response, FIX_UNAVAILABLE_REASON);
           return;
         }
@@ -306,14 +415,20 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           reference: request.params.reference,
           authorizedView: view,
         });
+        const userToken = await repository.loadActiveDatabricksFixToken(viewer.subject);
+        if (userToken === null) {
+          sendDatabricksFixAuthorizationRequired(response);
+          return;
+        }
+        const gitCredentialId = await userGitCredentials.preferredGitHubCredentialId(userToken);
         const session = await fixService.start({
           actorSubject: viewer.subject,
           assessment: view,
           sourceEvidence,
           guidance: body.guidance,
           credential,
-          omnigentAuth: { oboToken: null },
-          useAppGitCredential: true,
+          omnigentAuth: { oboToken: userToken, allowServicePrincipalFallback: false },
+          gitCredentialId,
         });
         response.status(202).json(toFixSession(session));
       } catch (error) {
@@ -452,18 +567,36 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
             response.status(409).json({ code: 'GITHUB_DISCONNECTED', message: 'Reconnect GitHub to continue.' });
             return;
           }
+          const manualToken =
+            session.gitCredentialId === null ? await repository.loadActiveDatabricksFixToken(viewer.subject) : null;
+          if (session.gitCredentialId === null && manualToken === null) {
+            sendDatabricksFixAuthorizationRequired(response);
+            return;
+          }
           session = await fixService.synchronize({
             actorSubject: owned.actorSubject,
             session,
             assessment: view,
             credential,
+            propagateAuthFailure: session.gitCredentialId === null,
             omnigentAuth:
-              session.gitCredentialId === null ? { oboToken: optionalOboAccessToken(request) } : { oboToken: null },
+              session.gitCredentialId === null
+                ? { oboToken: manualToken, allowServicePrincipalFallback: false }
+                : { oboToken: null },
           });
         }
         if (fixService !== null) await fixService.releaseSessionGitCredential(owned.actorSubject, session);
         response.json(toFixSession(session));
       } catch (error) {
+        if (
+          error instanceof OmnigentIntegrationError &&
+          (error.code === 'unauthorized' || error.code === 'forbidden')
+        ) {
+          const viewer = requireOboRequest(request);
+          await repository.disconnectDatabricksFixAuthorization(viewer.subject);
+          sendDatabricksFixAuthorizationRequired(response);
+          return;
+        }
         sendFixError(response, error);
       }
     });
@@ -477,6 +610,12 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           return;
         }
         await reauthorizeAssessment(assessmentService, appkit, request, session.assessmentReference);
+        const manualToken =
+          session.gitCredentialId === null ? await repository.loadActiveDatabricksFixToken(viewer.subject) : null;
+        if (session.gitCredentialId === null && manualToken === null) {
+          sendDatabricksFixAuthorizationRequired(response);
+          return;
+        }
         const cancelled =
           fixService === null
             ? await repository.requestOmnigentCancellation({
@@ -487,7 +626,9 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
                 actorSubject: viewer.subject,
                 session,
                 omnigentAuth:
-                  session.gitCredentialId === null ? { oboToken: optionalOboAccessToken(request) } : { oboToken: null },
+                  session.gitCredentialId === null
+                    ? { oboToken: manualToken, allowServicePrincipalFallback: false }
+                    : { oboToken: null },
               });
         response.json(toFixSession(cancelled));
       } catch (error) {
@@ -945,6 +1086,14 @@ function sendFixError(response: Response, error: unknown): void {
     return;
   }
   if (error instanceof OmnigentIntegrationError) {
+    if (error.code === 'git_credential_missing' || error.code === 'git_credential_ambiguous') {
+      response.status(409).json({ code: 'GIT_CREDENTIAL_REQUIRED', message: error.message });
+      return;
+    }
+    if (error.code === 'git_credential_access_denied') {
+      response.status(403).json({ code: 'GIT_CREDENTIAL_ACCESS_DENIED', message: error.message });
+      return;
+    }
     response.status(error.retryable ? 503 : 502).json({ code: 'OMNIGENT_UNAVAILABLE', message: error.message });
     return;
   }
@@ -984,6 +1133,10 @@ function sendRouteError(response: Response, error: unknown): void {
 
 function sendUnavailable(response: Response, message: string): void {
   response.status(503).json({ code: 'OMNIGENT_UNAVAILABLE', message });
+}
+
+function sendDatabricksFixAuthorizationRequired(response: Response): void {
+  response.status(409).json({ code: 'DATABRICKS_FIX_AUTH_REQUIRED', message: FIX_AUTH_REQUIRED_MESSAGE });
 }
 
 type SafeRequestStatus = 'succeeded' | 'denied' | 'unavailable' | 'stale' | 'failed';
@@ -1028,6 +1181,7 @@ function recordSafeRequestMetric(
 
 export function oauthCallbackFailureCode(error: unknown): string {
   if (error instanceof OboAuthorizationError) return 'obo_required';
+  if (error instanceof DatabricksFixOAuthError) return `databricks_${error.code}`;
   if (error instanceof GitHubIntegrationError) return `github_${error.code}`;
   if (error instanceof PersistenceError) return `persistence_${error.code}`;
   if (error instanceof Error && error.message === 'invalid_oauth_callback') return 'invalid_callback';
@@ -1053,6 +1207,12 @@ function safeReturnPath(value: unknown): string {
   } catch {
     return '/';
   }
+}
+
+function fixAuthorizationFailurePath(returnTo: string): string {
+  const url = new URL(returnTo, 'https://lineage-impact.invalid');
+  url.searchParams.set('fixAuth', 'failed');
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
 function hasControlCharacter(value: string): boolean {
@@ -1082,4 +1242,15 @@ function cookieValue(request: Request, name: string): string | null {
 function clearOAuthCookies(response: Response): void {
   response.clearCookie(OAUTH_BINDING_COOKIE, { ...OAUTH_COOKIE_OPTIONS, maxAge: undefined });
   response.clearCookie(OAUTH_RETURN_COOKIE, { ...OAUTH_COOKIE_OPTIONS, maxAge: undefined });
+}
+
+function clearDatabricksOAuthCookies(response: Response): void {
+  response.clearCookie(DATABRICKS_OAUTH_BINDING_COOKIE, {
+    ...DATABRICKS_OAUTH_COOKIE_OPTIONS,
+    maxAge: undefined,
+  });
+  response.clearCookie(DATABRICKS_OAUTH_RETURN_COOKIE, {
+    ...DATABRICKS_OAUTH_COOKIE_OPTIONS,
+    maxAge: undefined,
+  });
 }

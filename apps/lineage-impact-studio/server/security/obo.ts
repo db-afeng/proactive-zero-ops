@@ -34,6 +34,13 @@ export function requireOboAccessToken(request: Request): string {
   return accessToken;
 }
 
+/** A verified gateway email used only to bind a separate OAuth grant to the same user. */
+export function requireOboEmail(request: Request): string {
+  const email = optionalSingleHeader(request, 'x-forwarded-email');
+  if (email === null || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/u.test(email)) throw new OboAuthorizationError();
+  return email;
+}
+
 /** Returns the forwarded token when present so callers may fall back to app auth. */
 export function optionalOboAccessToken(request: Request): string | null {
   return oboAccessToken(request);

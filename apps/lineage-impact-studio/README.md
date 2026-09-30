@@ -24,23 +24,31 @@ Databricks identity, and can review and approve one guarded remediation commit.
   are returned only after the same Unity Catalog OBO authorization plus
   connected-user GitHub repository read access and exact PR base/head SHA
   validation.
-- Fix tab retries register the connected user's GitHub token as a temporary
-  credential owned by the app service principal. The managed session runs as
-  that same principal; the credential ID is retained in Lakebase until the
-  session finishes and is then removed. A cleanup sweep cancels abandoned
-  sessions and retries credential removal after restarts. Automatic CI execution
-  stays bound to the forwarded CI identity: the
+- Manual Fix tab sessions use a separate, explicit Databricks U2M OAuth grant
+  with `all-apis`, because the Apps OBO scope allowlist does not include the
+  beta Omnigent API. The public OAuth client uses PKCE, an exact callback, and
+  no `offline_access`; its access token is encrypted in Lakebase and expires
+  within one hour. The app verifies that the OAuth identity matches the
+  signed-in app user before saving the token. It uses that token for Omnigent
+  and to list the user's workspace Git credentials, passing only the default
+  GitHub credential ID (or the only GitHub credential ID) to Omnigent. It never
+  reads the Git credential secret, stores its ID in Lakebase, deletes it, or
+  falls back to the app service principal. The connected GitHub account
+  remains the identity used to validate the PR and publish a proposal branch.
+  Existing app-owned temporary credentials from earlier sessions are still
+  cleaned up after completion or cancellation. Automatic CI execution stays
+  bound to the forwarded CI identity: the
   trusted workflow registers its GitHub token as a short-lived Databricks Git
   credential, passes only that credential's ID to Omnigent, and deletes the
   credential when the proposal finishes. It never falls back to a different
   identity that cannot resolve that credential. Managed sessions use the
   `codex-native-ui` agent by default; `OMNIGENT_AGENT_NAME` can select another
-  installed agent explicitly. The deployed app pins managed sessions to
-  `gpt-5.6-terra` through `OMNIGENT_MODEL_OVERRIDE` before dispatching the
-  fix prompt, so Omnigent does not fall back to its 5.2 default.
+  installed agent explicitly. The deployed app does not override the model;
+  the built-in agent selects a model with a working sandbox
+  terminal. `OMNIGENT_MODEL_OVERRIDE` remains available for validated runtimes.
 - Omnigent must be able to clone the private repository as the identity that
-  owns the managed session. Fix tab retries provision that access from the
-  connected GitHub account, and CI sessions provision it from the workflow token.
+  owns the managed session. Manual sessions use the user's saved workspace Git
+  credential, and CI sessions provision access from the workflow token.
 - Lakebase stores OAuth state, encrypted GitHub tokens, fix sessions, encrypted
   patches, approvals, and append-only commit audit records. The app service
   principal must create and own the `lineage_impact` schema.
@@ -91,6 +99,26 @@ The client ID and client secret are injected through `valueFrom` bindings. Never
 put either value in source control, bundle variables, logs, or command arguments.
 The server must refuse GitHub OAuth when any required value is absent.
 
+Manual Fix also requires a separate **public** custom Databricks OAuth app
+integration named `lineage-impact-studio-manual-fix`, registered in account
+`0d26daa6-5e44-4c97-a497-ef015f91254a`. It uses only the exact redirect
+`https://lineage-impact-studio-7474650525906616.aws.databricksapps.com/api/databricks/oauth/callback`,
+with `scopes` and `user_authorized_scopes` set to `all-apis` and a 60-minute access
+token lifetime. The OAuth request omits `offline_access`, and the app neither
+requests nor stores a refresh token. The account policy also sets a 60-minute
+refresh-token TTL because Databricks requires it to be at least the access-token
+TTL, even when `offline_access` is omitted. Its non-secret client ID is set in
+`app.yaml` as `DATABRICKS_FIX_OAUTH_CLIENT_ID`. Users explicitly grant this
+separate access from the Fix tab; their ordinary assessment SQL remains on the
+app's narrowly scoped OBO token. Disconnecting clears the server-side copy of
+the short-lived token. Reauthorization is required after expiry, including to
+continue polling a long-running manual session.
+
+The registration is saved in `databricks-fix-oauth-integration.json` and its
+public client ID is in `app.yaml`. Deploy the root bundle with
+`--select apps.lineage_impact_studio`. Do not print or retain any OAuth access
+token in deployment logs.
+
 For local checks, copy `.env.example` to `.env`, populate local-only secret
 values, and keep `.env` untracked. Use Node.js 22.18 or newer. Do not initialize
 the `lineage_impact` schema with a developer identity: after deployment is
@@ -126,11 +154,14 @@ Deployment is blocked until all of the following are resolved:
    encryption key.
 3. Register and restrict the GitHub App, then configure its real client ID,
    client secret, and canonical OAuth redirect URI.
-4. Validate managed session creation, polling, cancellation, and diff retrieval
-   from the deployed app runtime. Fix tab retries create and remove an app-owned
-   Git credential. Automatic CI sessions create and delete a caller-owned
-   short-lived credential and must fail closed instead of falling back to the
-   app service principal.
+4. Validate user-owned managed session creation, polling, cancellation, and
+   diff retrieval from the deployed app runtime with the separately authorized
+   short-lived user token.
+   Confirm the default user-owned Git credential remains saved after the
+   session. Automatic CI sessions create and delete a caller-owned short-lived
+   credential and must fail closed instead of falling back to the app service
+   principal. Omnigent is a beta API and its acceptance of the custom OAuth
+   token must be confirmed during this smoke test.
 5. Make every validation gate below green.
 6. With a non-privileged test principal that has warehouse `CAN_USE` but no
    `SELECT` on a dedicated test table, execute the parameterized zero-row probe

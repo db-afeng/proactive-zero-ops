@@ -352,6 +352,26 @@ test('supports keyboard navigation across the persistent workbench tabs', async 
   await expect(page.getByRole('heading', { name: 'Commit audit' })).toBeVisible();
 });
 
+test('asks for separate Databricks authorization before a manual fix', async ({ page }) => {
+  await page.unroute('**/api/capabilities');
+  await page.route('**/api/capabilities', async (route) => {
+    await fulfillJson(route, {
+      omnigent: {
+        available: false,
+        authorizationRequired: true,
+        reason: 'Connect Databricks to authorize Omnigent as your user before starting a manual fix.',
+      },
+    });
+  });
+  await page.goto(`/assessments/${REFERENCE}#fix`);
+
+  await expect(page.getByText('This connection requests All APIs authorization')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Connect Databricks for fixes' })).toHaveAttribute(
+    'href',
+    `/api/databricks/oauth/login?returnTo=${encodeURIComponent(`/assessments/${REFERENCE}#fix`)}`
+  );
+});
+
 test('keeps the assessment usable without horizontal page overflow at desktop and narrow widths', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/assessments/${REFERENCE}`);
