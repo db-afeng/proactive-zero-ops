@@ -327,7 +327,8 @@ jobs:
           reference = os.environ["ASSESSMENT_REFERENCE"]
           head_sha = os.environ["HEAD_SHA"]
           github_token = os.environ["LINEAGE_FIX_GITHUB_TOKEN"]
-          auth_headers = dict(WorkspaceClient().config.authenticate())
+          workspace = WorkspaceClient()
+          auth_headers = dict(workspace.config.authenticate())
 
           def request(method, path, body=None):
               payload = None if body is None else json.dumps(body).encode("utf-8")
@@ -346,23 +347,40 @@ jobs:
               except urllib.error.HTTPError as error:
                   raise RuntimeError(f"automatic fix endpoint returned HTTP {error.code}") from None
 
-          session = request(
-              "POST",
-              f"/api/automation/assessments/{reference}/fix-sessions",
-              {"expectedHeadSha": head_sha},
-          )
-          session_id = session["id"]
-          for _ in range(120):
-              if session["status"] in {"complete", "failed", "cancelled"}:
-                  break
-              time.sleep(10)
-              session = request("GET", f"/api/automation/fix-sessions/{session_id}")
-          else:
-              raise RuntimeError("automatic fix proposal did not finish within 20 minutes")
+          git_credential_id = None
+          try:
+              created_credential = workspace.git_credentials.create(
+                  git_provider="gitHub",
+                  git_username="x-access-token",
+                  personal_access_token=github_token,
+              )
+              git_credential_id = created_credential.credential_id
+              if git_credential_id is None:
+                  raise RuntimeError("temporary Git credential was not created")
 
-          if session["status"] != "complete":
-              raise RuntimeError(f"automatic fix proposal ended with status {session['status']}")
-          print("Automatic fix proposal is ready in Lineage Impact Studio.")
+              session = request(
+                  "POST",
+                  f"/api/automation/assessments/{reference}/fix-sessions",
+                  {
+                      "expectedHeadSha": head_sha,
+                      "gitCredentialId": git_credential_id,
+                  },
+              )
+              session_id = session["id"]
+              for _ in range(120):
+                  if session["status"] in {"complete", "failed", "cancelled"}:
+                      break
+                  time.sleep(10)
+                  session = request("GET", f"/api/automation/fix-sessions/{session_id}")
+              else:
+                  raise RuntimeError("automatic fix proposal did not finish within 20 minutes")
+
+              if session["status"] != "complete":
+                  raise RuntimeError(f"automatic fix proposal ended with status {session['status']}")
+              print("Automatic fix proposal is ready in Lineage Impact Studio.")
+          finally:
+              if git_credential_id is not None:
+                  workspace.git_credentials.delete(git_credential_id)
           PY
 
       - name: Write job summary

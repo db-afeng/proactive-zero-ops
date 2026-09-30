@@ -24,17 +24,23 @@ Databricks identity, and can review and approve one guarded remediation commit.
   are returned only after the same Unity Catalog OBO authorization plus
   connected-user GitHub repository read access and exact PR base/head SHA
   validation.
-- Omnigent execution tries the forwarded user token first and retries with the
-  Databricks App service principal only after an authorization failure. That
-  fallback can run the isolated agent; it never substitutes for the user's
-  assessment disclosure checks, GitHub read/write authorization, approval, or
-  commit identity. Managed sessions use the `codex-native-ui` agent by default;
-  `OMNIGENT_AGENT_NAME` can select another installed agent explicitly.
+- Fix tab retries register the connected user's GitHub token as a temporary
+  credential owned by the app service principal. The managed session runs as
+  that same principal; the credential ID is retained in Lakebase until the
+  session finishes and is then removed. A cleanup sweep cancels abandoned
+  sessions and retries credential removal after restarts. Automatic CI execution
+  stays bound to the forwarded CI identity: the
+  trusted workflow registers its GitHub token as a short-lived Databricks Git
+  credential, passes only that credential's ID to Omnigent, and deletes the
+  credential when the proposal finishes. It never falls back to a different
+  identity that cannot resolve that credential. Managed sessions use the
+  `codex-native-ui` agent by default; `OMNIGENT_AGENT_NAME` can select another
+  installed agent explicitly. The deployed app pins managed sessions to
+  `gpt-5.6-terra` through `OMNIGENT_MODEL_OVERRIDE` before dispatching the
+  fix prompt, so Omnigent does not fall back to its 5.2 default.
 - Omnigent must be able to clone the private repository as the identity that
-  owns the managed session. When OBO is accepted, that is the workspace user;
-  after service-principal fallback, the app service principal is the execution
-  identity and must have a usable Git credential or linked account in the
-  managed sandbox.
+  owns the managed session. Fix tab retries provision that access from the
+  connected GitHub account, and CI sessions provision it from the workflow token.
 - Lakebase stores OAuth state, encrypted GitHub tokens, fix sessions, encrypted
   patches, approvals, and append-only commit audit records. The app service
   principal must create and own the `lineage_impact` schema.
@@ -120,12 +126,11 @@ Deployment is blocked until all of the following are resolved:
    encryption key.
 3. Register and restrict the GitHub App, then configure its real client ID,
    client secret, and canonical OAuth redirect URI.
-4. Configure private-repository clone credentials for the Omnigent execution
-   identity, then validate managed session creation, polling, cancellation, and
-   diff retrieval from the deployed app runtime. The integration tries user
-   OBO first and falls back to the app service principal only when OBO is not
-   authorized; credentials linked only to the user do not cover a session
-   owned by the service-principal fallback.
+4. Validate managed session creation, polling, cancellation, and diff retrieval
+   from the deployed app runtime. Fix tab retries create and remove an app-owned
+   Git credential. Automatic CI sessions create and delete a caller-owned
+   short-lived credential and must fail closed instead of falling back to the
+   app service principal.
 5. Make every validation gate below green.
 6. With a non-privileged test principal that has warehouse `CAN_USE` but no
    `SELECT` on a dedicated test table, execute the parameterized zero-row probe

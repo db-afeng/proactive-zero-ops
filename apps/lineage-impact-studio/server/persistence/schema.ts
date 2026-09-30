@@ -56,6 +56,7 @@ export const LINEAGE_IMPACT_BOOTSTRAP_SQL = Object.freeze([
     authorized_evidence_digest TEXT NOT NULL,
     guidance TEXT,
     provider_session_id TEXT,
+    git_credential_id BIGINT,
     status TEXT NOT NULL,
     status_message TEXT,
     cancel_requested_at TIMESTAMPTZ,
@@ -71,6 +72,8 @@ export const LINEAGE_IMPACT_BOOTSTRAP_SQL = Object.freeze([
   )`,
   `ALTER TABLE lineage_impact.omnigent_sessions
     ADD COLUMN IF NOT EXISTS provider_session_id TEXT`,
+  `ALTER TABLE lineage_impact.omnigent_sessions
+    ADD COLUMN IF NOT EXISTS git_credential_id BIGINT`,
   `CREATE INDEX IF NOT EXISTS omnigent_sessions_actor_assessment_idx
     ON lineage_impact.omnigent_sessions (actor_subject, assessment_reference, created_at DESC)`,
   `CREATE TABLE IF NOT EXISTS lineage_impact.validated_patches (

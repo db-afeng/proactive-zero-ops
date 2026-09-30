@@ -59,6 +59,7 @@ describe('Omnigent authentication', () => {
           title: 'Lineage fix',
           prompt: 'Make the narrow source change.',
           labels: { source: 'lineage-impact-studio' },
+          gitCredentialId: 123456789,
         },
         { oboToken: OBO_TOKEN }
       )
@@ -73,6 +74,7 @@ describe('Omnigent authentication', () => {
       host_type: 'managed',
       initial_items: [],
       workspace: 'https://github.com/db-afeng/proactive-zero-ops.git#feature/lineage-fix',
+      git_credential_id: 123456789,
     });
     const eventBody = requestJsonBody(fetchMock.mock.calls[2]?.[1]?.body);
     expect(eventBody).toMatchObject({
@@ -80,6 +82,40 @@ describe('Omnigent authentication', () => {
       data: { role: 'user', content: [{ type: 'input_text', text: 'Make the narrow source change.' }] },
     });
     expect(requestUrl(fetchMock.mock.calls[2]?.[0])).toContain('/v1/sessions/session-1/events');
+  });
+
+  it('pins a managed session to 5.6 Terra before dispatching its prompt', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ data: [{ id: 'agent-1', name: 'codex-native-ui' }] }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'session-1', status: 'idle' }, 201))
+      .mockResolvedValueOnce(jsonResponse({ id: 'session-1', model_override: 'gpt-5.6-terra' }))
+      .mockResolvedValueOnce(jsonResponse({ accepted: true }, 202));
+    const client = new OmnigentClient({
+      workspaceHost: HOST,
+      modelOverride: 'gpt-5.6-terra',
+      fetchImplementation: fetchMock,
+    });
+
+    await client.createManagedSession(
+      {
+        repository: 'db-afeng/proactive-zero-ops',
+        headRef: 'feature/lineage-fix',
+        title: 'Lineage fix',
+        prompt: 'Make the narrow source change.',
+        labels: { source: 'lineage-impact-studio' },
+      },
+      { oboToken: OBO_TOKEN }
+    );
+
+    expect(requestUrl(fetchMock.mock.calls[2]?.[0])).toContain('/v1/sessions/session-1');
+    expect(fetchMock.mock.calls[2]?.[1]?.method).toBe('PATCH');
+    expect(requestJsonBody(fetchMock.mock.calls[2]?.[1]?.body)).toEqual({
+      model_override: 'gpt-5.6-terra',
+      silent: true,
+    });
+    expect(new Headers(fetchMock.mock.calls[2]?.[1]?.headers).get('Authorization')).toBe(`Bearer ${OBO_TOKEN}`);
+    expect(requestUrl(fetchMock.mock.calls[3]?.[0])).toContain('/v1/sessions/session-1/events');
   });
 
   it('turns private-repository clone failures into actionable safe guidance', async () => {
@@ -100,6 +136,25 @@ describe('Omnigent authentication', () => {
         error:
           'Omnigent could not clone this private repository. Configure a Git credential for the Omnigent execution identity and try again.',
       },
+    });
+  });
+
+  it('identifies a denied Omnigent model service without exposing the provider response', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        id: 'session-1',
+        status: 'failed',
+        last_task_error: {
+          code: 'codex_reauth_required',
+          message:
+            "unexpected status 403 Forbidden: User does not have permission to use model service 'system.ai.gpt-5-2'",
+        },
+      })
+    );
+    const client = new OmnigentClient({ workspaceHost: HOST, fetchImplementation: fetchMock });
+
+    await expect(client.getSession('session-1', { oboToken: OBO_TOKEN })).resolves.toMatchObject({
+      value: { error: 'Omnigent’s execution identity is not authorized to use its configured model service.' },
     });
   });
 
@@ -163,6 +218,22 @@ describe('Omnigent authentication', () => {
     expect(servicePrincipal.getToken).toHaveBeenCalledTimes(1);
     expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get('Authorization')).toBe(`Bearer ${OBO_TOKEN}`);
     expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get('Authorization')).toBe(`Bearer ${SERVICE_TOKEN}`);
+  });
+
+  it.each([401, 403])('does not change identities for caller-owned credentials after OBO status %s', async (status) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ error: 'denied' }, status));
+    const servicePrincipal = { getToken: vi.fn().mockResolvedValue(SERVICE_TOKEN) };
+    const client = new OmnigentClient({
+      workspaceHost: HOST,
+      fetchImplementation: fetchMock,
+      servicePrincipal,
+    });
+
+    await expect(client.probe({ oboToken: OBO_TOKEN, allowServicePrincipalFallback: false })).resolves.toEqual({
+      available: false,
+      reason: status === 401 ? 'Omnigent authentication is no longer valid' : 'Omnigent denied this operation',
+    });
+    expect(servicePrincipal.getToken).not.toHaveBeenCalled();
   });
 
   it('caches a service-principal OAuth token until its refresh window', async () => {

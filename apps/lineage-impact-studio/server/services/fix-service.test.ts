@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AssessmentViewV3, SourceEvidenceView } from '../domain/assessment-view';
 import { GitHubAppClient, type ValidatedPullRequest } from '../integrations/github';
 import { OmnigentClient, OmnigentIntegrationError } from '../integrations/omnigent';
+import { WorkspaceGitCredentialClient } from '../integrations/omnigent/git-credential-client';
 import {
   LineageImpactRepository,
   type GitHubUserCredential,
@@ -151,6 +152,155 @@ describe('FixService failure handling', () => {
     );
   });
 
+  it('binds the automatic runner to the caller-owned Git credential', async () => {
+    const queued = session('queued');
+    const running = session(
+      'running',
+      'Omnigent is preparing an isolated workspace on your behalf.',
+      'provider-session'
+    );
+    const repository = testRepository();
+    vi.spyOn(repository, 'createOmnigentSession').mockResolvedValue(queued);
+    vi.spyOn(repository, 'transitionOmnigentSession').mockResolvedValue(running);
+    const github = testGitHub();
+    vi.spyOn(github, 'getValidatedPullRequest').mockResolvedValue(pull);
+    const omnigent = testOmnigent();
+    const createManagedSession = vi.spyOn(omnigent, 'createManagedSession').mockResolvedValue({
+      authMode: 'obo',
+      value: {
+        id: 'provider-session',
+        status: 'idle',
+        runnerOnline: false,
+        hostOnline: false,
+        sandboxStage: 'provisioning',
+        error: null,
+      },
+    });
+    const service = new FixService(repository, github, omnigent);
+
+    await service.start({
+      actorSubject: ACTOR,
+      assessment,
+      sourceEvidence,
+      guidance: 'Preserve the consumer contract.',
+      credential,
+      omnigentAuth: { oboToken: 'ci-obo-token', allowServicePrincipalFallback: false },
+      gitCredentialId: 123456789,
+    });
+
+    expect(createManagedSession).toHaveBeenCalledWith(expect.objectContaining({ gitCredentialId: 123456789 }), {
+      oboToken: 'ci-obo-token',
+      allowServicePrincipalFallback: false,
+    });
+  });
+
+  it('creates and later removes an app-owned Git credential for a Fix tab retry', async () => {
+    const queued = session('queued');
+    const running = session(
+      'running',
+      'Omnigent is preparing an isolated workspace using the app service principal.',
+      'provider-session'
+    );
+    running.gitCredentialId = 987654321;
+    const complete = session('complete', 'Validated patch ready for review.', 'provider-session');
+    complete.gitCredentialId = 987654321;
+    const repository = testRepository();
+    vi.spyOn(repository, 'createOmnigentSession').mockResolvedValue(queued);
+    const attach = vi.spyOn(repository, 'attachGitCredential').mockResolvedValue();
+    vi.spyOn(repository, 'transitionOmnigentSession').mockResolvedValue(running);
+    const clear = vi.spyOn(repository, 'clearGitCredential').mockResolvedValue();
+    const github = testGitHub();
+    vi.spyOn(github, 'getValidatedPullRequest').mockResolvedValue(pull);
+    const omnigent = testOmnigent();
+    const createManagedSession = vi.spyOn(omnigent, 'createManagedSession').mockResolvedValue({
+      authMode: 'service-principal',
+      value: {
+        id: 'provider-session',
+        status: 'idle',
+        runnerOnline: false,
+        hostOnline: false,
+        sandboxStage: 'provisioning',
+        error: null,
+      },
+    });
+    const gitCredentials = testGitCredentials();
+    const createCredential = vi.spyOn(gitCredentials, 'create').mockResolvedValue(987654321);
+    const deleteCredential = vi.spyOn(gitCredentials, 'delete').mockResolvedValue();
+    const service = new FixService(repository, github, omnigent, gitCredentials);
+
+    await expect(
+      service.start({
+        actorSubject: ACTOR,
+        assessment,
+        sourceEvidence,
+        guidance: 'Preserve the consumer contract.',
+        credential,
+        omnigentAuth: { oboToken: null },
+        useAppGitCredential: true,
+      })
+    ).resolves.toEqual(running);
+    expect(createCredential).toHaveBeenCalledWith(credential.accessToken, queued.id);
+    expect(attach).toHaveBeenCalledWith({ actorSubject: ACTOR, sessionId: queued.id, credentialId: 987654321 });
+    expect(createManagedSession).toHaveBeenCalledWith(expect.objectContaining({ gitCredentialId: 987654321 }), {
+      oboToken: null,
+    });
+    expect(deleteCredential).not.toHaveBeenCalled();
+
+    await service.releaseSessionGitCredential(ACTOR, complete);
+    expect(deleteCredential).toHaveBeenCalledWith(987654321);
+    expect(clear).toHaveBeenCalledWith({ actorSubject: ACTOR, sessionId: queued.id, credentialId: 987654321 });
+  });
+
+  it('removes an app-owned credential when Omnigent startup fails', async () => {
+    const queued = session('queued');
+    const failed = session('failed', 'Omnigent is temporarily unavailable');
+    failed.gitCredentialId = 987654321;
+    const repository = testRepository();
+    vi.spyOn(repository, 'createOmnigentSession').mockResolvedValue(queued);
+    vi.spyOn(repository, 'attachGitCredential').mockResolvedValue();
+    vi.spyOn(repository, 'transitionOmnigentSession').mockResolvedValue(failed);
+    const clear = vi.spyOn(repository, 'clearGitCredential').mockResolvedValue();
+    const github = testGitHub();
+    vi.spyOn(github, 'getValidatedPullRequest').mockResolvedValue(pull);
+    const omnigent = testOmnigent();
+    vi.spyOn(omnigent, 'createManagedSession').mockRejectedValue(
+      new OmnigentIntegrationError('unavailable', 503, true)
+    );
+    const gitCredentials = testGitCredentials();
+    vi.spyOn(gitCredentials, 'create').mockResolvedValue(987654321);
+    const remove = vi.spyOn(gitCredentials, 'delete').mockResolvedValue();
+    const service = new FixService(repository, github, omnigent, gitCredentials);
+
+    await expect(
+      service.start({
+        actorSubject: ACTOR,
+        assessment,
+        sourceEvidence,
+        guidance: 'Preserve the consumer contract.',
+        credential,
+        omnigentAuth: { oboToken: null },
+        useAppGitCredential: true,
+      })
+    ).resolves.toEqual(failed);
+    expect(remove).toHaveBeenCalledWith(987654321);
+    expect(clear).toHaveBeenCalledWith({ actorSubject: ACTOR, sessionId: queued.id, credentialId: 987654321 });
+  });
+
+  it('cleans up a terminal session credential after a restart', async () => {
+    const complete = session('complete', 'Validated patch ready for review.', 'provider-session');
+    complete.gitCredentialId = 987654321;
+    const repository = testRepository();
+    vi.spyOn(repository, 'listGitCredentialsToClean').mockResolvedValue([{ actorSubject: ACTOR, session: complete }]);
+    const clear = vi.spyOn(repository, 'clearGitCredential').mockResolvedValue();
+    const gitCredentials = testGitCredentials();
+    const remove = vi.spyOn(gitCredentials, 'delete').mockResolvedValue();
+    const service = new FixService(repository, testGitHub(), testOmnigent(), gitCredentials);
+
+    await service.cleanupAbandonedGitCredentials();
+    expect(remove).toHaveBeenCalledWith(987654321);
+    expect(clear).toHaveBeenCalledWith({ actorSubject: ACTOR, sessionId: complete.id, credentialId: 987654321 });
+  });
+
   it('fails closed when an idle Omnigent session produced no source changes', async () => {
     const running = session('running', 'Omnigent is proposing a fix.', 'provider-session');
     const validating = session('validating', 'Validating.', 'provider-session');
@@ -275,6 +425,7 @@ function session(
   return {
     id: '11111111-1111-4111-8111-111111111111',
     providerSessionId,
+    gitCredentialId: null,
     assessmentReference: assessment.reference,
     expectedHeadSha: HEAD_SHA,
     authorizedEvidenceDigest: `sha256:${'c'.repeat(64)}`,
@@ -309,6 +460,14 @@ function testGitHub(): GitHubAppClient {
 function testOmnigent(): OmnigentClient {
   return new OmnigentClient({
     workspaceHost: 'https://workspace.example.databricks.com',
+    fetchImplementation: vi.fn(),
+  });
+}
+
+function testGitCredentials(): WorkspaceGitCredentialClient {
+  return new WorkspaceGitCredentialClient({
+    workspaceHost: 'https://workspace.example.databricks.com',
+    tokenProvider: { getToken: vi.fn().mockResolvedValue('app-service-principal-token') },
     fetchImplementation: vi.fn(),
   });
 }

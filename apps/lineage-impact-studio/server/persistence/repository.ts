@@ -84,6 +84,7 @@ export type OmnigentSessionStatus = z.infer<typeof OmnigentSessionStatusSchema>;
 export interface OmnigentSessionView {
   id: string;
   providerSessionId: string | null;
+  gitCredentialId: number | null;
   assessmentReference: string;
   expectedHeadSha: string;
   authorizedEvidenceDigest: string;
@@ -202,6 +203,7 @@ const GitHubCredentialRowSchema = z.object({ encrypted_credentials: z.unknown() 
 const OmnigentSessionRowSchema = z.object({
   id: UuidSchema,
   provider_session_id: z.string().max(512).nullable(),
+  git_credential_id: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable(),
   assessment_reference: AssessmentReferenceSchema,
   expected_head_sha: CommitShaSchema,
   authorized_evidence_digest: PatchDigestSchema,
@@ -442,7 +444,7 @@ export class LineageImpactRepository {
         id, actor_subject, assessment_reference, expected_head_sha,
         authorized_evidence_digest, guidance, status, created_at, updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $7)
-      RETURNING id, provider_session_id, assessment_reference, expected_head_sha, authorized_evidence_digest,
+      RETURNING id, provider_session_id, git_credential_id, assessment_reference, expected_head_sha, authorized_evidence_digest,
         guidance, status, status_message, cancel_requested_at, created_at, updated_at, finished_at`,
       [id, actor, reference, expectedHeadSha, evidenceDigest, guidance, now]
     );
@@ -453,7 +455,7 @@ export class LineageImpactRepository {
     const actor = ActorSchema.parse(actorSubject);
     const id = UuidSchema.parse(sessionId);
     const result = await this.executor.query(
-      `SELECT id, provider_session_id, assessment_reference, expected_head_sha, authorized_evidence_digest,
+      `SELECT id, provider_session_id, git_credential_id, assessment_reference, expected_head_sha, authorized_evidence_digest,
         guidance, status, status_message, cancel_requested_at, created_at, updated_at, finished_at
        FROM lineage_impact.omnigent_sessions
        WHERE actor_subject = $1 AND id = $2`,
@@ -472,7 +474,7 @@ export class LineageImpactRepository {
     const reference = AssessmentReferenceSchema.parse(input.assessmentReference);
     const expectedHeadSha = CommitShaSchema.parse(input.expectedHeadSha);
     const result = await this.executor.query(
-      `SELECT id, provider_session_id, assessment_reference, expected_head_sha, authorized_evidence_digest,
+      `SELECT id, provider_session_id, git_credential_id, assessment_reference, expected_head_sha, authorized_evidence_digest,
         guidance, status, status_message, cancel_requested_at, created_at, updated_at, finished_at
        FROM lineage_impact.omnigent_sessions
        WHERE actor_subject = $1 AND assessment_reference = $2 AND expected_head_sha = $3
@@ -491,7 +493,7 @@ export class LineageImpactRepository {
     const reference = AssessmentReferenceSchema.parse(input.assessmentReference);
     const expectedHeadSha = CommitShaSchema.parse(input.expectedHeadSha);
     const result = await this.executor.query(
-      `SELECT actor_subject, id, provider_session_id, assessment_reference, expected_head_sha,
+      `SELECT actor_subject, id, provider_session_id, git_credential_id, assessment_reference, expected_head_sha,
         authorized_evidence_digest, guidance, status, status_message, cancel_requested_at,
         created_at, updated_at, finished_at
        FROM lineage_impact.omnigent_sessions
@@ -507,7 +509,7 @@ export class LineageImpactRepository {
   async getOmnigentSessionById(sessionId: string): Promise<OwnedOmnigentSession | null> {
     const id = UuidSchema.parse(sessionId);
     const result = await this.executor.query(
-      `SELECT actor_subject, id, provider_session_id, assessment_reference, expected_head_sha,
+      `SELECT actor_subject, id, provider_session_id, git_credential_id, assessment_reference, expected_head_sha,
         authorized_evidence_digest, guidance, status, status_message, cancel_requested_at,
         created_at, updated_at, finished_at
        FROM lineage_impact.omnigent_sessions
@@ -516,6 +518,48 @@ export class LineageImpactRepository {
     );
     if (result.rows.length === 0) return null;
     return mapOwnedOmnigentSession(parseSingleRow(OwnedOmnigentSessionRowSchema, result.rows));
+  }
+
+  async attachGitCredential(input: { actorSubject: string; sessionId: string; credentialId: number }): Promise<void> {
+    const actor = ActorSchema.parse(input.actorSubject);
+    const id = UuidSchema.parse(input.sessionId);
+    const credentialId = z.number().int().positive().max(Number.MAX_SAFE_INTEGER).parse(input.credentialId);
+    const result = await this.executor.query(
+      `UPDATE lineage_impact.omnigent_sessions
+       SET git_credential_id = $3
+       WHERE actor_subject = $1 AND id = $2 AND status = 'queued' AND git_credential_id IS NULL
+       RETURNING id`,
+      [actor, id, credentialId]
+    );
+    if (result.rows.length !== 1) throw new PersistenceError('conflict');
+  }
+
+  async clearGitCredential(input: { actorSubject: string; sessionId: string; credentialId: number }): Promise<void> {
+    const actor = ActorSchema.parse(input.actorSubject);
+    const id = UuidSchema.parse(input.sessionId);
+    const credentialId = z.number().int().positive().max(Number.MAX_SAFE_INTEGER).parse(input.credentialId);
+    await this.executor.query(
+      `UPDATE lineage_impact.omnigent_sessions
+       SET git_credential_id = NULL
+       WHERE actor_subject = $1 AND id = $2 AND git_credential_id = $3`,
+      [actor, id, credentialId]
+    );
+  }
+
+  async listGitCredentialsToClean(createdBefore: Date): Promise<OwnedOmnigentSession[]> {
+    const cutoff = validateDate(createdBefore).toISOString();
+    const result = await this.executor.query(
+      `SELECT actor_subject, id, provider_session_id, git_credential_id, assessment_reference,
+        expected_head_sha, authorized_evidence_digest, guidance, status, status_message,
+        cancel_requested_at, created_at, updated_at, finished_at
+       FROM lineage_impact.omnigent_sessions
+       WHERE git_credential_id IS NOT NULL
+         AND (status IN ('complete', 'failed', 'cancelled') OR created_at < $1)
+       ORDER BY created_at ASC
+       LIMIT 100`,
+      [cutoff]
+    );
+    return result.rows.map((row) => mapOwnedOmnigentSession(OwnedOmnigentSessionRowSchema.parse(row)));
   }
 
   async transitionOmnigentSession(input: {
@@ -543,7 +587,7 @@ export class LineageImpactRepository {
            updated_at = $7,
            finished_at = CASE WHEN $8 THEN $7 ELSE finished_at END
        WHERE actor_subject = $1 AND id = $2 AND status = ANY($3::text[])
-       RETURNING id, provider_session_id, assessment_reference, expected_head_sha, authorized_evidence_digest,
+       RETURNING id, provider_session_id, git_credential_id, assessment_reference, expected_head_sha, authorized_evidence_digest,
          guidance, status, status_message, cancel_requested_at, created_at, updated_at, finished_at`,
       [actor, id, expectedStatuses, status, statusMessage, providerSessionId, now, terminal]
     );
@@ -563,7 +607,7 @@ export class LineageImpactRepository {
       `UPDATE lineage_impact.omnigent_sessions
        SET status = 'cancelled', cancel_requested_at = $3, updated_at = $3, finished_at = $3
        WHERE actor_subject = $1 AND id = $2 AND status IN ('queued', 'running', 'validating')
-       RETURNING id, provider_session_id, assessment_reference, expected_head_sha, authorized_evidence_digest,
+       RETURNING id, provider_session_id, git_credential_id, assessment_reference, expected_head_sha, authorized_evidence_digest,
          guidance, status, status_message, cancel_requested_at, created_at, updated_at, finished_at`,
       [actor, id, now]
     );
@@ -1000,6 +1044,7 @@ function mapOmnigentSession(row: z.infer<typeof OmnigentSessionRowSchema>): Omni
   return {
     id: row.id,
     providerSessionId: row.provider_session_id,
+    gitCredentialId: row.git_credential_id,
     assessmentReference: row.assessment_reference,
     expectedHeadSha: row.expected_head_sha,
     authorizedEvidenceDigest: row.authorized_evidence_digest,

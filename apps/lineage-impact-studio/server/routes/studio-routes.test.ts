@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { GitHubIntegrationError } from '../integrations/github/errors';
 import { PersistenceError } from '../persistence/repository';
 import { OboAuthorizationError } from '../security/obo';
-import { isFailedAssessmentStatus, oauthCallbackFailureCode } from './studio-routes';
+import { isFailedAssessmentStatus, latestVisibleFixSession, oauthCallbackFailureCode } from './studio-routes';
 
 describe('OAuth callback diagnostics', () => {
   it('reports only allowlisted failure codes', () => {
@@ -26,5 +26,14 @@ describe('automatic fix assessment status gate', () => {
 
   it.each(['pass', 'warn'] as const)('rejects non-failing assessment status %s', (status) => {
     expect(isFailedAssessmentStatus(status)).toBe(false);
+  });
+});
+
+describe('Fix tab session selection', () => {
+  it('shows a newer interactive retry instead of an older failed automatic session', () => {
+    const automated = { id: 'automatic', createdAt: '2026-09-29T00:00:00.000Z' };
+    const interactive = { id: 'retry', createdAt: '2026-09-29T00:01:00.000Z' };
+    expect(latestVisibleFixSession(automated, interactive)).toEqual(interactive);
+    expect(latestVisibleFixSession(interactive, automated)).toEqual(interactive);
   });
 });

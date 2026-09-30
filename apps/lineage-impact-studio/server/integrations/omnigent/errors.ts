@@ -8,6 +8,7 @@ export type OmnigentIntegrationErrorCode =
   | 'rate_limited'
   | 'unavailable'
   | 'invalid_response'
+  | 'git_credential_unavailable'
   | 'request_failed';
 
 /** A sanitized error which never carries response bodies, prompts, or credentials. */
@@ -43,6 +44,8 @@ function messageFor(code: OmnigentIntegrationErrorCode): string {
       return 'Omnigent is temporarily unavailable';
     case 'invalid_response':
       return 'Omnigent returned an invalid response';
+    case 'git_credential_unavailable':
+      return 'Databricks could not prepare private repository access for Omnigent';
     case 'request_failed':
       return 'Omnigent request failed';
   }

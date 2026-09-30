@@ -12,6 +12,7 @@ import { CommitShaSchema, parseAssessmentReference } from '../domain/identifiers
 import { GitHubAppClient } from '../integrations/github';
 import { GitHubIntegrationError } from '../integrations/github/errors';
 import { OmnigentClient, OmnigentIntegrationError } from '../integrations/omnigent';
+import { WorkspaceGitCredentialClient } from '../integrations/omnigent/git-credential-client';
 import {
   LineageImpactRepository,
   PersistenceError,
@@ -47,7 +48,14 @@ const StartFixBodySchema = z
   })
   .strict();
 
-const StartAutomaticFixBodySchema = z.object({ expectedHeadSha: CommitShaSchema }).strict();
+const StartAutomaticFixBodySchema = z
+  .object({
+    expectedHeadSha: CommitShaSchema,
+    // Optional during the two-phase rollout so the app can be deployed before
+    // the trusted workflow starts sending caller-owned credentials.
+    gitCredentialId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+  })
+  .strict();
 
 const PatchActionBodySchema = z
   .object({
@@ -83,8 +91,22 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
   });
   const oauth = optionalOAuthRuntime();
   const omnigent = OmnigentClient.fromEnvironment();
-  const fixService = oauth !== null && omnigent !== null ? new FixService(repository, oauth.client, omnigent) : null;
+  const workspaceGitCredentials = WorkspaceGitCredentialClient.fromEnvironment();
+  const fixService =
+    oauth !== null && omnigent !== null
+      ? new FixService(repository, oauth.client, omnigent, workspaceGitCredentials)
+      : null;
   const githubCredentials = oauth === null ? null : new GitHubCredentialService(repository, oauth.client);
+
+  if (fixService !== null && workspaceGitCredentials !== null) {
+    const clean = () => {
+      void fixService.cleanupAbandonedGitCredentials().catch(() => {
+        console.warn('Temporary Git credential cleanup will be retried.');
+      });
+    };
+    clean();
+    setInterval(clean, 15 * 60 * 1000).unref();
+  }
 
   appkit.server.extend((application) => {
     application.get('/api/capabilities', async (request, response) => {
@@ -262,13 +284,22 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           });
           return;
         }
-        if (fixService === null || githubCredentials === null) {
+        if (fixService === null || githubCredentials === null || workspaceGitCredentials === null) {
           sendUnavailable(response, FIX_UNAVAILABLE_REASON);
           return;
         }
         const credential = await githubCredentials.loadActive(viewer.subject);
         if (credential === null) {
           response.status(409).json({ code: 'GITHUB_DISCONNECTED', message: 'Connect GitHub to generate a fix.' });
+          return;
+        }
+        const existing = await repository.getLatestOmnigentSession({
+          actorSubject: viewer.subject,
+          assessmentReference: view.reference,
+          expectedHeadSha: view.pullRequest.headSha,
+        });
+        if (existing !== null && !isTerminalFixSession(existing)) {
+          response.json(toFixSession(existing));
           return;
         }
         const sourceEvidence = await assessmentService.getSourceEvidence({
@@ -281,7 +312,8 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           sourceEvidence,
           guidance: body.guidance,
           credential,
-          omnigentAuth: { oboToken: optionalOboAccessToken(request) },
+          omnigentAuth: { oboToken: null },
+          useAppGitCredential: true,
         });
         response.status(202).json(toFixSession(session));
       } catch (error) {
@@ -319,7 +351,7 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           assessmentReference: view.reference,
           expectedHeadSha: body.expectedHeadSha,
         });
-        if (existing !== null) {
+        if (existing !== null && existing.status !== 'failed' && existing.status !== 'cancelled') {
           response.json(toFixSession(existing));
           return;
         }
@@ -333,7 +365,14 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           sourceEvidence,
           guidance: AUTOMATIC_FIX_GUIDANCE,
           credential: transientGitHubCredential(request),
-          omnigentAuth: { oboToken: null },
+          omnigentAuth:
+            body.gitCredentialId === undefined
+              ? { oboToken: null }
+              : {
+                  oboToken: optionalOboAccessToken(request),
+                  allowServicePrincipalFallback: false,
+                },
+          gitCredentialId: body.gitCredentialId,
         });
         response.status(202).json(toFixSession(session));
       } catch (error) {
@@ -350,13 +389,12 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           assessmentReference: view.reference,
           expectedHeadSha: view.pullRequest.headSha,
         });
-        const session =
-          automated ??
-          (await repository.getLatestOmnigentSession({
-            actorSubject: viewer.subject,
-            assessmentReference: view.reference,
-            expectedHeadSha: view.pullRequest.headSha,
-          }));
+        const interactive = await repository.getLatestOmnigentSession({
+          actorSubject: viewer.subject,
+          assessmentReference: view.reference,
+          expectedHeadSha: view.pullRequest.headSha,
+        });
+        const session = latestVisibleFixSession(automated, interactive);
         response.json({ session: session === null ? null : toFixSession(session) });
       } catch (error) {
         sendFixError(response, error);
@@ -382,7 +420,9 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
             session,
             assessment: view,
             credential: transientGitHubCredential(request),
-            omnigentAuth: { oboToken: null },
+            // New sessions resolve under the caller. Legacy sessions created
+            // during rollout remain reachable through the app-SP fallback.
+            omnigentAuth: { oboToken: optionalOboAccessToken(request) },
           });
         }
         response.json(toFixSession(session));
@@ -401,13 +441,14 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
         }
         let session = owned.session;
         const view = await reauthorizeAssessment(assessmentService, appkit, request, session.assessmentReference);
-        if (fixService !== null && githubCredentials !== null && !isTerminalFixSession(session)) {
+        if (
+          fixService !== null &&
+          githubCredentials !== null &&
+          !isAutomationActor(owned.actorSubject) &&
+          !isTerminalFixSession(session)
+        ) {
           const credential = await githubCredentials.loadActive(viewer.subject);
           if (credential === null) {
-            if (isAutomationActor(owned.actorSubject)) {
-              response.json(toFixSession(session));
-              return;
-            }
             response.status(409).json({ code: 'GITHUB_DISCONNECTED', message: 'Reconnect GitHub to continue.' });
             return;
           }
@@ -416,11 +457,11 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
             session,
             assessment: view,
             credential,
-            omnigentAuth: {
-              oboToken: isAutomationActor(owned.actorSubject) ? null : optionalOboAccessToken(request),
-            },
+            omnigentAuth:
+              session.gitCredentialId === null ? { oboToken: optionalOboAccessToken(request) } : { oboToken: null },
           });
         }
+        if (fixService !== null) await fixService.releaseSessionGitCredential(owned.actorSubject, session);
         response.json(toFixSession(session));
       } catch (error) {
         sendFixError(response, error);
@@ -445,7 +486,8 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
             : await fixService.cancel({
                 actorSubject: viewer.subject,
                 session,
-                omnigentAuth: { oboToken: optionalOboAccessToken(request) },
+                omnigentAuth:
+                  session.gitCredentialId === null ? { oboToken: optionalOboAccessToken(request) } : { oboToken: null },
               });
         response.json(toFixSession(cancelled));
       } catch (error) {
@@ -738,6 +780,15 @@ function toFixSession(session: OmnigentSessionView) {
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
   };
+}
+
+export function latestVisibleFixSession<T extends { createdAt: string }>(
+  automated: T | null,
+  interactive: T | null
+): T | null {
+  if (automated === null) return interactive;
+  if (interactive === null) return automated;
+  return interactive.createdAt >= automated.createdAt ? interactive : automated;
 }
 
 function isTerminalFixSession(session: OmnigentSessionView): boolean {

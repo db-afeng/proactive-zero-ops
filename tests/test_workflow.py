@@ -59,3 +59,15 @@ def test_automatic_fix_starts_for_every_failed_assessment() -> None:
     assert "steps.public.outputs.exit_code == '1'" in automatic_fix
     assert "steps.public.outputs.exit_code == '2'" in automatic_fix
     assert "steps.public.outputs.exit_code == '0'" not in automatic_fix
+
+
+def test_automatic_fix_uses_a_short_lived_caller_owned_git_credential() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    automatic_fix = workflow.split(
+        "name: Start and finalize automatic fix proposal", maxsplit=1
+    )[1].split("name: Write job summary", maxsplit=1)[0]
+    assert "workspace.git_credentials.create(" in automatic_fix
+    assert '"gitCredentialId": git_credential_id' in automatic_fix
+    assert "finally:" in automatic_fix
+    assert "workspace.git_credentials.delete(git_credential_id)" in automatic_fix

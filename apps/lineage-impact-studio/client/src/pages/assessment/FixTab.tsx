@@ -38,6 +38,7 @@ import { useEffect, useRef, useState } from 'react';
 import { MonacoDiff } from '@/components/MonacoDiff';
 import {
   ApiRequestError,
+  createFixSession,
   disconnectGitHub,
   getAssessmentFixSession,
   getCapabilities,
@@ -176,6 +177,35 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
     }
   }
 
+  async function startFix() {
+    setActionPending(true);
+    setActionError(undefined);
+    try {
+      const started = await createFixSession(
+        assessment.reference,
+        'Propose the smallest safe source change that resolves the failed downstream-impact check while preserving existing contracts.',
+        assessment.pullRequest.headSha
+      );
+      setSession(started);
+      setSessionLookup({ kind: 'ready', value: started });
+      setPatch({ kind: 'idle' });
+      setSelectedPath(undefined);
+    } catch (error) {
+      handleScopedError(error, setPermissionLost, setStaleHead, setActionError);
+    } finally {
+      setActionPending(false);
+    }
+  }
+
+  const canStartFix =
+    assessment.source.freshness === 'current' &&
+    !staleHead &&
+    !permissionLost &&
+    !actionPending &&
+    github.kind === 'ready' &&
+    github.value.connected &&
+    omnigent?.available === true;
+
   return (
     <section aria-labelledby="fix-title" className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -184,8 +214,8 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
             Propose a fix
           </h1>
           <p className="mt-1 max-w-[72ch] text-sm leading-6 text-muted-foreground">
-            A failed GitHub check starts Omnigent automatically in the app service principal&apos;s isolated sandbox.
-            Generated changes are validated and committed to a separate proposal branch before they appear here.
+            A failed GitHub check starts an isolated Omnigent proposal. You can retry a failed session with your
+            connected GitHub account. Generated changes are validated and committed to a separate proposal branch.
           </p>
         </div>
         <GitHubConnectionControl
@@ -212,8 +242,7 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
           <ShieldAlert aria-hidden="true" />
           <AlertTitle>Permission changed</AlertTitle>
           <AlertDescription>
-            Your Databricks or GitHub access changed during this review. The app service principal can run Omnigent, but
-            it cannot replace your assessment or GitHub authorization. Reload after access is restored.
+            Your Databricks or GitHub access changed during this review. Restore access and reload before retrying.
           </AlertDescription>
         </Alert>
       ) : null}
@@ -235,10 +264,24 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
       ) : null}
 
       {!session ? (
-        <AutomaticFixLookup state={sessionLookup} onRetry={() => setSessionLookupRetry((value) => value + 1)} />
+        <AutomaticFixLookup
+          state={sessionLookup}
+          onRetry={() => setSessionLookupRetry((value) => value + 1)}
+          onStart={() => void startFix()}
+          canStart={canStartFix && (assessment.status === 'block' || assessment.status === 'error')}
+          startPending={actionPending}
+        />
       ) : (
         <div className="space-y-6">
-          <SessionProgress session={session} updateState={updateState} onRetry={retry} />
+          <SessionProgress
+            session={session}
+            updateState={updateState}
+            onRetry={retry}
+            onStartAgain={() => void startFix()}
+            canStartAgain={canStartFix}
+            startPending={actionPending}
+            githubConnected={github.kind === 'ready' && github.value.connected}
+          />
 
           {session.status === 'complete' ? (
             <PatchArea
@@ -254,7 +297,19 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
   );
 }
 
-function AutomaticFixLookup({ state, onRetry }: { state: Loadable<FixSession | null>; onRetry: () => void }) {
+function AutomaticFixLookup({
+  state,
+  onRetry,
+  onStart,
+  canStart,
+  startPending,
+}: {
+  state: Loadable<FixSession | null>;
+  onRetry: () => void;
+  onStart: () => void;
+  canStart: boolean;
+  startPending: boolean;
+}) {
   if (state.kind === 'idle' || state.kind === 'loading') {
     return (
       <Card aria-busy="true" className="shadow-none">
@@ -294,13 +349,19 @@ function AutomaticFixLookup({ state, onRetry }: { state: Loadable<FixSession | n
         </EmptyMedia>
         <EmptyTitle>Waiting for the failed GitHub check</EmptyTitle>
         <EmptyDescription>
-          A blocking downstream-impact check starts the isolated Omnigent proposal automatically.
+          A blocking downstream-impact check starts the isolated Omnigent proposal automatically. If it did not start,
+          you can start it here.
         </EmptyDescription>
       </EmptyHeader>
-      <Button variant="outline" size="sm" onClick={onRetry}>
-        <RotateCw aria-hidden="true" />
-        Check again
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" size="sm" onClick={onRetry}>
+          <RotateCw aria-hidden="true" />
+          Check again
+        </Button>
+        <Button size="sm" disabled={!canStart} onClick={onStart}>
+          {startPending ? 'Starting…' : 'Start fix now'}
+        </Button>
+      </div>
     </Empty>
   );
 }
@@ -360,10 +421,18 @@ function SessionProgress({
   session,
   updateState,
   onRetry,
+  onStartAgain,
+  canStartAgain,
+  startPending,
+  githubConnected,
 }: {
   session: FixSession;
   updateState: ProgressUpdateState;
   onRetry: () => void;
+  onStartAgain: () => void;
+  canStartAgain: boolean;
+  startPending: boolean;
+  githubConnected: boolean;
 }) {
   const progress = session.progress ?? defaultProgress(session.status);
   const active = !isTerminalSession(session.status);
@@ -406,7 +475,14 @@ function SessionProgress({
         <Alert variant="destructive">
           <XCircle aria-hidden="true" />
           <AlertTitle>Omnigent could not produce a valid fix</AlertTitle>
-          <AlertDescription>{session.error ?? 'No patch was retained.'}</AlertDescription>
+          <AlertDescription className="space-y-3">
+            <p>{session.error ?? 'No patch was retained.'}</p>
+            {!githubConnected ? <p>Connect GitHub above to retry with access to the private repository.</p> : null}
+            <Button variant="outline" size="sm" disabled={!canStartAgain} onClick={onStartAgain}>
+              <RotateCw aria-hidden="true" />
+              {startPending ? 'Starting…' : 'Retry fix'}
+            </Button>
+          </AlertDescription>
         </Alert>
       ) : null}
 
@@ -414,7 +490,13 @@ function SessionProgress({
         <Alert>
           <Ban aria-hidden="true" />
           <AlertTitle>Fix generation cancelled</AlertTitle>
-          <AlertDescription>No patch from this session can be approved or committed.</AlertDescription>
+          <AlertDescription className="space-y-3">
+            <p>No patch from this session can be approved or committed.</p>
+            <Button variant="outline" size="sm" disabled={!canStartAgain} onClick={onStartAgain}>
+              <RotateCw aria-hidden="true" />
+              {startPending ? 'Starting…' : 'Start again'}
+            </Button>
+          </AlertDescription>
         </Alert>
       ) : null}
     </section>

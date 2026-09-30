@@ -14,3 +14,5 @@ env:
     valueFrom: github-client-secret
   - name: GITHUB_REDIRECT_URI
     value: https://lineage-impact-studio-7474650525906616.aws.databricksapps.com/api/github/oauth/callback
+  - name: OMNIGENT_MODEL_OVERRIDE
+    value: gpt-5.6-terra

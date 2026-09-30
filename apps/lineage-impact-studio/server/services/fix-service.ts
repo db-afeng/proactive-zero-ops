@@ -8,6 +8,7 @@ import {
   type OmnigentAuthContext,
   type OmnigentFileDiff,
 } from '../integrations/omnigent';
+import { WorkspaceGitCredentialClient } from '../integrations/omnigent/git-credential-client';
 import {
   LineageImpactRepository,
   PersistenceError,
@@ -40,7 +41,8 @@ export class FixService {
   constructor(
     private readonly repository: LineageImpactRepository,
     private readonly github: GitHubAppClient,
-    private readonly omnigent: OmnigentClient
+    private readonly omnigent: OmnigentClient,
+    private readonly gitCredentials: WorkspaceGitCredentialClient | null = null
   ) {}
 
   async start(input: {
@@ -50,7 +52,12 @@ export class FixService {
     guidance: string;
     credential: GitHubUserCredential;
     omnigentAuth: OmnigentAuthContext;
+    gitCredentialId?: number;
+    useAppGitCredential?: boolean;
   }): Promise<OmnigentSessionView> {
+    if (input.useAppGitCredential && input.gitCredentialId !== undefined) {
+      throw new OmnigentIntegrationError('invalid_request');
+    }
     const guidance = normalizedGuidance(input.guidance);
     const pull = await this.github.getValidatedPullRequest({
       accessToken: input.credential.accessToken,
@@ -70,7 +77,17 @@ export class FixService {
       authorizedEvidenceDigest: evidenceDigest,
       guidance,
     });
+    let gitCredentialId = input.gitCredentialId;
     try {
+      if (input.useAppGitCredential) {
+        if (this.gitCredentials === null) throw new OmnigentIntegrationError('invalid_configuration');
+        gitCredentialId = await this.gitCredentials.create(input.credential.accessToken, local.id);
+        await this.repository.attachGitCredential({
+          actorSubject: input.actorSubject,
+          sessionId: local.id,
+          credentialId: gitCredentialId,
+        });
+      }
       const created = await this.omnigent.createManagedSession(
         {
           repository: pull.repository,
@@ -82,11 +99,12 @@ export class FixService {
             'lineage-assessment': input.assessment.reference,
             'expected-head': pull.headSha,
           },
+          gitCredentialId,
         },
         input.omnigentAuth
       );
       if (created.value.status === 'failed' || created.value.sandboxStage === 'failed') {
-        return await this.repository.transitionOmnigentSession({
+        const failed = await this.repository.transitionOmnigentSession({
           actorSubject: input.actorSubject,
           sessionId: local.id,
           expectedStatuses: ['queued'],
@@ -94,6 +112,10 @@ export class FixService {
           statusMessage: created.value.error ?? 'Omnigent generation failed.',
           providerSessionId: created.value.id,
         });
+        if (input.useAppGitCredential && gitCredentialId !== undefined) {
+          await this.releaseGitCredential(input.actorSubject, local.id, gitCredentialId);
+        }
+        return failed;
       }
       return await this.repository.transitionOmnigentSession({
         actorSubject: input.actorSubject,
@@ -107,7 +129,46 @@ export class FixService {
         providerSessionId: created.value.id,
       });
     } catch (error) {
-      return await this.fail(local, input.actorSubject, fixFailureMessage(error));
+      try {
+        return await this.fail(local, input.actorSubject, fixFailureMessage(error));
+      } finally {
+        if (input.useAppGitCredential && gitCredentialId !== undefined) {
+          await this.releaseGitCredential(input.actorSubject, local.id, gitCredentialId);
+        }
+      }
+    }
+  }
+
+  async releaseSessionGitCredential(actorSubject: string, session: OmnigentSessionView): Promise<void> {
+    if (!isTerminal(session.status) || session.gitCredentialId === null) return;
+    await this.releaseGitCredential(actorSubject, session.id, session.gitCredentialId);
+  }
+
+  async cleanupAbandonedGitCredentials(): Promise<void> {
+    if (this.gitCredentials === null) return;
+    const cutoff = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const candidates = await this.repository.listGitCredentialsToClean(cutoff);
+    for (const { actorSubject, session } of candidates) {
+      if (!isTerminal(session.status)) {
+        try {
+          await this.cancel({ actorSubject, session, omnigentAuth: { oboToken: null } });
+        } catch {
+          // Another request may have completed the session. The next sweep will retry cleanup.
+        }
+      } else {
+        await this.releaseSessionGitCredential(actorSubject, session);
+      }
+    }
+  }
+
+  private async releaseGitCredential(actorSubject: string, sessionId: string, credentialId: number): Promise<void> {
+    if (this.gitCredentials === null) return;
+    try {
+      await this.gitCredentials.delete(credentialId);
+      await this.repository.clearGitCredential({ actorSubject, sessionId, credentialId });
+    } catch {
+      // Retain the ID in Lakebase so a later status request or cleanup sweep can retry.
+      console.warn('Temporary Git credential cleanup will be retried.');
     }
   }
 
@@ -167,6 +228,10 @@ export class FixService {
         // The local cancellation is authoritative. Do not leak or retry a provider error here.
       }
     }
+    await this.releaseSessionGitCredential(input.actorSubject, {
+      ...cancelled,
+      gitCredentialId: input.session.gitCredentialId,
+    });
     return cancelled;
   }
 

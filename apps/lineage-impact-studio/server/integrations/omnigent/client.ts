@@ -10,6 +10,7 @@ export type OmnigentAuthMode = 'obo' | 'service-principal';
 
 export interface OmnigentAuthContext {
   oboToken?: string | null;
+  allowServicePrincipalFallback?: boolean;
 }
 
 export interface OmnigentCapability {
@@ -44,6 +45,7 @@ export interface CreateManagedSessionInput {
   title: string;
   prompt: string;
   labels: Record<string, string>;
+  gitCredentialId?: number;
 }
 
 interface AuthenticatedResult<T> {
@@ -119,18 +121,21 @@ const MANAGED_DISPATCH_TIMEOUT_MS = 90_000;
 export class OmnigentClient {
   readonly #baseUrl: string;
   readonly #agentName: string;
+  readonly #modelOverride: string | null;
   readonly #fetch: FetchImplementation;
   readonly #servicePrincipal: ServicePrincipalTokenProvider | null;
 
   constructor(options: {
     workspaceHost: string;
     agentName?: string;
+    modelOverride?: string | null;
     fetchImplementation?: FetchImplementation;
     servicePrincipal?: ServicePrincipalTokenProvider | null;
   }) {
     const host = normalizedWorkspaceHost(options.workspaceHost);
     this.#baseUrl = `${host}/api/2.0/omnigent`;
     this.#agentName = validateAgentName(options.agentName ?? 'codex-native-ui');
+    this.#modelOverride = validateModelOverride(options.modelOverride);
     this.#fetch = options.fetchImplementation ?? fetch;
     this.#servicePrincipal = options.servicePrincipal ?? null;
   }
@@ -152,6 +157,7 @@ export class OmnigentClient {
     return new OmnigentClient({
       workspaceHost,
       agentName: process.env.OMNIGENT_AGENT_NAME,
+      modelOverride: process.env.OMNIGENT_MODEL_OVERRIDE,
       fetchImplementation,
       servicePrincipal,
     });
@@ -190,10 +196,22 @@ export class OmnigentClient {
       labels: input.labels,
       host_type: 'managed',
       workspace: managedRepositoryUrl(input.repository, input.headRef),
+      ...(input.gitCredentialId === undefined ? {} : { git_credential_id: input.gitCredentialId }),
     };
     const created = await this.#json('/v1/sessions', { method: 'POST', body: JSON.stringify(body) }, auth);
     const snapshot = parseSession(created.value);
     try {
+      if (this.#modelOverride !== null) {
+        await this.#json(
+          `/v1/sessions/${encodeOpaqueId(snapshot.id)}`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify({ model_override: this.#modelOverride, silent: true }),
+          },
+          auth,
+          true
+        );
+      }
       const dispatched = await this.#json(
         `/v1/sessions/${encodeOpaqueId(snapshot.id)}/events`,
         { method: 'POST', body: JSON.stringify(message) },
@@ -299,6 +317,7 @@ export class OmnigentClient {
       if (![401, 403, ...(fallbackOnNotFound ? [404] : [])].includes(response.status)) {
         throw responseError(response.status);
       }
+      if (auth.allowServicePrincipalFallback === false) throw responseError(response.status);
     }
     if (this.#servicePrincipal === null) {
       throw new OmnigentIntegrationError(oboToken === null ? 'invalid_configuration' : 'forbidden');
@@ -396,6 +415,9 @@ function parseSession(value: unknown): OmnigentSessionSnapshot {
 function sanitizedSessionError(value: string | null | undefined): string | null {
   if (!value) return null;
   const normalized = value.toLowerCase();
+  if (normalized.includes('permission to use model service') || normalized.includes('codex_reauth_required')) {
+    return 'Omnigent’s execution identity is not authorized to use its configured model service.';
+  }
   const mentionsGit = ['clone', 'git', 'repository'].some((term) => normalized.includes(term));
   const mentionsCredentials = ['credential', 'authentication', 'linked account'].some((term) =>
     normalized.includes(term)
@@ -454,6 +476,14 @@ function managedRepositoryUrl(repository: string, headRef: string): string {
 
 function validateAgentName(value: string): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(value)) {
+    throw new OmnigentIntegrationError('invalid_configuration');
+  }
+  return value;
+}
+
+function validateModelOverride(value: string | null | undefined): string | null {
+  if (value == null || value === '') return null;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/u.test(value)) {
     throw new OmnigentIntegrationError('invalid_configuration');
   }
   return value;
