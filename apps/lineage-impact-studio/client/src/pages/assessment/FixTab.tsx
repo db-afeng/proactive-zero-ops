@@ -7,6 +7,12 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -21,6 +27,7 @@ import {
   AlertCircle,
   Ban,
   CheckCircle2,
+  ChevronDown,
   CircleAlert,
   CircleDashed,
   Clipboard,
@@ -259,30 +266,25 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
             Propose a fix
           </h1>
           <p className="mt-1 max-w-[72ch] text-sm leading-6 text-muted-foreground">
-            A failed GitHub check starts a separate automatic Omnigent proposal. Manual fixes use your Databricks
-            workspace Git credential to clone the repository and your connected GitHub account to publish a validated
+            A failed GitHub check starts a separate automatic Omnigent proposal. Manual fixes use your Databricks fix
+            access and saved workspace Git credential to run Omnigent, and your GitHub connection to publish a validated
             proposal branch.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <GitHubConnectionControl
+          <GitHubConnectionStatus
             state={github}
             assessment={assessment}
-            disabled={actionPending}
-            onDisconnect={() => void disconnect()}
             onRetry={() => setPrerequisiteRetry((value) => value + 1)}
           />
-          {omnigent?.available === true ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={actionPending || shouldPoll}
-              onClick={() => void disconnectDatabricks()}
-            >
-              <KeyRound aria-hidden="true" />
-              Disconnect Databricks fix access
-            </Button>
-          ) : null}
+          <FixConnectionsMenu
+            github={github}
+            databricksConnected={omnigent?.available === true}
+            disabled={actionPending}
+            databricksDisconnectDisabled={shouldPoll}
+            onDisconnectGitHub={() => void disconnect()}
+            onDisconnectDatabricks={() => void disconnectDatabricks()}
+          />
         </div>
       </div>
 
@@ -441,17 +443,13 @@ function AutomaticFixLookup({
   );
 }
 
-function GitHubConnectionControl({
+function GitHubConnectionStatus({
   state,
   assessment,
-  disabled,
-  onDisconnect,
   onRetry,
 }: {
   state: Loadable<GitHubConnection>;
   assessment: AssessmentViewV3;
-  disabled: boolean;
-  onDisconnect: () => void;
   onRetry: () => void;
 }) {
   if (state.kind === 'idle' || state.kind === 'loading') {
@@ -485,10 +483,54 @@ function GitHubConnectionControl({
       <span>
         GitHub connected as <strong>{state.value.login ?? 'GitHub user'}</strong>
       </span>
-      <Button variant="ghost" size="sm" disabled={disabled} onClick={onDisconnect}>
-        Disconnect GitHub
-      </Button>
     </div>
+  );
+}
+
+function FixConnectionsMenu({
+  github,
+  databricksConnected,
+  disabled,
+  databricksDisconnectDisabled,
+  onDisconnectGitHub,
+  onDisconnectDatabricks,
+}: {
+  github: Loadable<GitHubConnection>;
+  databricksConnected: boolean;
+  disabled: boolean;
+  databricksDisconnectDisabled: boolean;
+  onDisconnectGitHub: () => void;
+  onDisconnectDatabricks: () => void;
+}) {
+  const githubConnected = github.kind === 'ready' && github.value.connected;
+  if (!githubConnected && !databricksConnected) return null;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="sm" disabled={disabled}>
+          <KeyRound aria-hidden="true" />
+          Manage connections
+          <ChevronDown aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuLabel>Manual fix connections</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {githubConnected ? (
+          <DropdownMenuItem onSelect={onDisconnectGitHub}>
+            <Github aria-hidden="true" />
+            Disconnect GitHub
+          </DropdownMenuItem>
+        ) : null}
+        {databricksConnected ? (
+          <DropdownMenuItem disabled={databricksDisconnectDisabled} onSelect={onDisconnectDatabricks}>
+            <KeyRound aria-hidden="true" />
+            Disconnect Databricks fix access
+          </DropdownMenuItem>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
