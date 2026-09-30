@@ -389,6 +389,28 @@ export class LineageImpactRepository {
     return GitHubUserCredentialSchema.parse(parseJsonText(plaintext));
   }
 
+  /** Rotates only the encrypted OAuth credential while preserving the connected identity and original connection time. */
+  async updateGitHubCredential(input: {
+    actorSubject: string;
+    credential: GitHubUserCredential;
+    now?: Date;
+  }): Promise<boolean> {
+    const actor = ActorSchema.parse(input.actorSubject);
+    const credential = GitHubUserCredentialSchema.parse(input.credential);
+    const now = validateDate(input.now ?? new Date()).toISOString();
+    const encrypted = this.cipher.seal(JSON.stringify(credential), githubCredentialAssociatedData(actor));
+    const result = await this.executor.query(
+      `UPDATE lineage_impact.github_connections
+       SET encrypted_credentials = $2,
+           token_expires_at = $3,
+           updated_at = $4
+       WHERE actor_subject = $1
+       RETURNING actor_subject`,
+      [actor, encrypted, credential.expiresAt, now]
+    );
+    return result.rows.length === 1;
+  }
+
   async disconnectGitHub(actorSubject: string): Promise<boolean> {
     const actor = ActorSchema.parse(actorSubject);
     const result = await this.executor.query(

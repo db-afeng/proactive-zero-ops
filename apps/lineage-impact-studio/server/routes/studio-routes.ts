@@ -30,6 +30,7 @@ import {
 } from '../services/assessment-service';
 import type { UserAnalyticsExecutor } from '../services/asset-authorization';
 import { FixService } from '../services/fix-service';
+import { GitHubCredentialService } from '../services/github-credential-service';
 import { VolumeRestrictedEnvelopeReader, type VolumeReader } from '../services/restricted-envelope-reader';
 
 const OAUTH_BINDING_COOKIE = 'lineage_impact_oauth_binding';
@@ -83,6 +84,7 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
   const oauth = optionalOAuthRuntime();
   const omnigent = OmnigentClient.fromEnvironment();
   const fixService = oauth !== null && omnigent !== null ? new FixService(repository, oauth.client, omnigent) : null;
+  const githubCredentials = oauth === null ? null : new GitHubCredentialService(repository, oauth.client);
 
   appkit.server.extend((application) => {
     application.get('/api/capabilities', async (request, response) => {
@@ -123,7 +125,7 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
         const view = await reauthorizeAssessment(assessmentService, appkit, request, request.params.reference);
         if (view.detailState !== 'available') throw new DetailedEvidenceUnavailableError();
         const viewer = requireOboRequest(request);
-        if (oauth === null) {
+        if (oauth === null || githubCredentials === null) {
           response.status(503).json({
             code: 'SOURCE_EVIDENCE_UNAVAILABLE',
             message: 'GitHub authorization is not configured for this deployment.',
@@ -131,7 +133,7 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           metricStatus = 'unavailable';
           return;
         }
-        const credential = await repository.loadGitHubCredential(viewer.subject);
+        const credential = await githubCredentials.loadActive(viewer.subject);
         if (credential === null) {
           response.status(409).json({
             code: 'GITHUB_DISCONNECTED',
@@ -234,8 +236,8 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
     application.post('/api/github/disconnect', async (request, response) => {
       try {
         const viewer = requireOboRequest(request);
-        if (oauth !== null) {
-          const credential = await repository.loadGitHubCredential(viewer.subject);
+        if (oauth !== null && githubCredentials !== null) {
+          const credential = await githubCredentials.loadActive(viewer.subject);
           if (credential !== null) {
             await oauth.client.revokeUserToken(credential.accessToken);
           }
@@ -260,11 +262,11 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           });
           return;
         }
-        if (fixService === null) {
+        if (fixService === null || githubCredentials === null) {
           sendUnavailable(response, FIX_UNAVAILABLE_REASON);
           return;
         }
-        const credential = await repository.loadGitHubCredential(viewer.subject);
+        const credential = await githubCredentials.loadActive(viewer.subject);
         if (credential === null) {
           response.status(409).json({ code: 'GITHUB_DISCONNECTED', message: 'Connect GitHub to generate a fix.' });
           return;
@@ -399,8 +401,8 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
         }
         let session = owned.session;
         const view = await reauthorizeAssessment(assessmentService, appkit, request, session.assessmentReference);
-        if (fixService !== null && !isTerminalFixSession(session)) {
-          const credential = await repository.loadGitHubCredential(viewer.subject);
+        if (fixService !== null && githubCredentials !== null && !isTerminalFixSession(session)) {
+          const credential = await githubCredentials.loadActive(viewer.subject);
           if (credential === null) {
             if (isAutomationActor(owned.actorSubject)) {
               response.json(toFixSession(session));
@@ -496,6 +498,7 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           actorSubject: viewer.subject,
           body,
           github: oauth?.client ?? null,
+          githubCredentials,
         });
         const approval = await repository.approvePatch({
           actorSubject: viewer.subject,
@@ -526,6 +529,7 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
           actorSubject: viewer.subject,
           body,
           github: oauth?.client ?? null,
+          githubCredentials,
         });
         if (oauth === null) {
           sendUnavailable(response, 'GitHub OAuth is not configured for this deployment.');
@@ -659,8 +663,11 @@ async function loadPatchActionContext(input: {
   actorSubject: string;
   body: z.infer<typeof PatchActionBodySchema>;
   github: GitHubAppClient | null;
+  githubCredentials: GitHubCredentialService | null;
 }) {
-  if (input.github === null) throw new GitHubIntegrationError('invalid_configuration');
+  if (input.github === null || input.githubCredentials === null) {
+    throw new GitHubIntegrationError('invalid_configuration');
+  }
   const session = await input.repository.getOmnigentSession(input.actorSubject, input.sessionId);
   if (session === null) throw new PersistenceError('not_found');
   if (session.status !== 'complete') throw new PersistenceError('conflict');
@@ -676,7 +683,7 @@ async function loadPatchActionContext(input: {
   ) {
     throw new GitHubIntegrationError('head_changed');
   }
-  const credential = await input.repository.loadGitHubCredential(input.actorSubject);
+  const credential = await input.githubCredentials.loadActive(input.actorSubject);
   if (credential === null) throw new GitHubIntegrationError('unauthorized');
   const pull = await input.github.getValidatedPullRequest({
     accessToken: credential.accessToken,

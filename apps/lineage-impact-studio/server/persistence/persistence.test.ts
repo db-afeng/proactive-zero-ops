@@ -119,6 +119,10 @@ describe('LineageImpactRepository', () => {
         };
       },
       () => ({ rows: [{ encrypted_credentials: encryptedValue }] }),
+      (_text, params) => {
+        encryptedValue = params[1];
+        return { rows: [{ actor_subject: ACTOR }] };
+      },
     ]);
     const repository = new LineageImpactRepository(executor, new Aes256GcmCipher(randomBytes(32)));
     const credential = {
@@ -147,6 +151,18 @@ describe('LineageImpactRepository', () => {
     expect(JSON.stringify(status)).not.toContain('cipher');
     expect(await repository.loadGitHubCredential(ACTOR)).toEqual(credential);
     expect(executor.calls[1]?.params).toEqual([ACTOR]);
+
+    const rotated = { ...credential, accessToken: 'ghu_rotated_access_token' };
+    await expect(
+      repository.updateGitHubCredential({
+        actorSubject: ACTOR,
+        credential: rotated,
+        now: new Date('2026-09-28T01:00:00.000Z'),
+      })
+    ).resolves.toBe(true);
+    expect(executor.calls[2]?.text).toContain('UPDATE lineage_impact.github_connections');
+    expect(executor.calls[2]?.text).not.toContain('connected_at');
+    expect(JSON.stringify(executor.calls[2]?.params)).not.toContain(rotated.accessToken);
   });
 
   it('reserves commit idempotency by actor and rejects reuse for different immutable inputs', async () => {
