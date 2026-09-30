@@ -483,10 +483,10 @@ function GitHubConnectionControl({
     <div className="flex items-center gap-2 text-sm">
       <Github className="size-4 text-muted-foreground" aria-hidden="true" />
       <span>
-        Connected as <strong>{state.value.login ?? 'GitHub user'}</strong>
+        GitHub connected as <strong>{state.value.login ?? 'GitHub user'}</strong>
       </span>
       <Button variant="ghost" size="sm" disabled={disabled} onClick={onDisconnect}>
-        Disconnect
+        Disconnect GitHub
       </Button>
     </div>
   );
