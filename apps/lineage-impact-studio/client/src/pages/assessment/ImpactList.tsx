@@ -15,7 +15,8 @@ import {
 } from '@databricks/appkit-ui/react';
 import { AlertCircle, ChevronDown, ExternalLink, RotateCw } from 'lucide-react';
 
-import type { AssessmentImpact, AssessmentUsageObject } from '@/lib/contracts';
+import { CodeIdentifier } from '@/components/CodeIdentifier';
+import type { AssessmentImpact, AssessmentUsageObject, UsageObjectKind } from '@/lib/contracts';
 
 import { isVerifiedBreak, operationLabel, targetLabel } from './impact-copy';
 import {
@@ -93,11 +94,11 @@ export function ImpactList({
                       aria-hidden="true"
                     />
                     <span className="min-w-0 flex-1">
-                      <code className="block truncate font-mono text-sm font-semibold" title={asset}>
-                        {shortAsset(asset)}
-                      </code>
-                      <span className="block truncate font-mono text-xs text-muted-foreground" title={asset}>
-                        {asset}
+                      <span className="block truncate text-sm font-semibold" title={asset}>
+                        <CodeIdentifier value={shortAsset(asset)} />
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground" title={asset}>
+                        <CodeIdentifier value={asset} />
                       </span>
                     </span>
                     <span
@@ -139,7 +140,9 @@ export function ImpactList({
                               {impact.relation === 'transitive' ? 'Transitive' : 'Direct'}
                             </Badge>
                           </span>
-                          <code className="min-w-0 break-all font-mono text-sm font-medium">{targetLabel(impact)}</code>
+                          <span className="min-w-0 break-all text-sm font-medium">
+                            <CodeIdentifier value={targetLabel(impact)} />
+                          </span>
                           <span className="text-muted-foreground md:text-foreground">
                             <span className="mr-1 text-xs text-muted-foreground md:hidden">Operation:</span>
                             {operationLabel(impact.operation)}
@@ -314,26 +317,48 @@ function ConsumerLink({ object }: { object: AssessmentUsageObject }) {
   const titleAlreadyIncludesKind = new RegExp(`^${kind}\\b`, 'i').test(object.title);
   const linkLabel = titleAlreadyIncludesKind ? object.title : `${kind} ${object.title}`;
   const access = { read: 'Reads', write: 'Writes', read_write: 'Reads and writes' }[object.accessMode];
+  const viaAssets = [...new Set(object.viaAssets)];
   return (
-    <div className="space-y-1">
-      <a
-        href={object.url}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex max-w-full items-center gap-1.5 break-all text-sm font-medium underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        aria-label={`Open ${linkLabel} in Databricks`}
-      >
-        {object.title}
-        <ExternalLink className="size-3.5 shrink-0" aria-hidden="true" />
-      </a>
-      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <span>{kind}</span>
-        <span>{access}</span>
-        <span>Last seen {formatObservedDate(object.lastObservedAt)}</span>
-      </p>
-      {object.viaAssets.length > 0 ? (
-        <p className="break-all text-xs text-muted-foreground">Via {object.viaAssets.join(', ')}</p>
-      ) : null}
+    <div className="flex items-start gap-2.5">
+      <img src={CONSUMER_ICONS[object.kind]} alt="" aria-hidden="true" className="mt-0.5 size-5 shrink-0" />
+      <div className="min-w-0 space-y-1">
+        <a
+          href={object.url}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex max-w-full items-center gap-1.5 break-all text-sm font-medium underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label={`Open ${linkLabel} in Databricks`}
+        >
+          {object.title}
+          <ExternalLink className="size-3.5 shrink-0" aria-hidden="true" />
+        </a>
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          <span>{kind}</span>
+          <span>{access}</span>
+          <span>Last seen {formatObservedDate(object.lastObservedAt)}</span>
+        </p>
+        {viaAssets.length > 0 ? (
+          <p className="break-all text-xs text-muted-foreground">
+            Via{' '}
+            {viaAssets.map((asset, index) => (
+              <span key={asset}>
+                {index > 0 ? ', ' : null}
+                <CodeIdentifier value={asset} />
+              </span>
+            ))}
+          </p>
+        ) : null}
+      </div>
     </div>
   );
 }
+
+const CONSUMER_ICONS: Record<UsageObjectKind, string> = {
+  query: '/consumer-icons/query.svg',
+  dashboard: '/consumer-icons/dashboard.svg',
+  genie: '/consumer-icons/genie.svg',
+  notebook: '/consumer-icons/notebook.svg',
+  pipeline: '/consumer-icons/pipeline.svg',
+  job: '/consumer-icons/job.svg',
+  alert: '/consumer-icons/alert.svg',
+};

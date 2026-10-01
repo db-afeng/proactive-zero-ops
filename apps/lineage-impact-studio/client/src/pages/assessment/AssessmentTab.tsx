@@ -21,6 +21,8 @@ import { Check, ChevronDown, CircleAlert, RotateCw } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 import { ScrollFadeArea } from '@/components/ScrollFadeArea';
+import { IdentifierText } from '@/components/CodeIdentifier';
+import { assessmentIdentifiers } from '@/components/assessment-identifiers';
 import { getAssessmentUsage } from '@/lib/api';
 import type { AssessmentViewV3 } from '@/lib/contracts';
 
@@ -35,6 +37,7 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) 
   const [scope, setScope] = useState<ImpactScope>('all');
   const [showContext, setShowContext] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const identifiers = assessmentIdentifiers(assessment);
   const [expandedAsset, setExpandedAsset] = useState<string | null>(null);
   const [usage, setUsage] = useState<UsageLoadState>({ kind: 'loading' });
   const [usageRetryToken, setUsageRetryToken] = useState(0);
@@ -130,7 +133,7 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) 
             id="assessment-summary-title"
             className="mt-3 max-w-[58rem] font-mono text-2xl font-semibold leading-tight tracking-tight"
           >
-            {assessment.headline}
+            <IdentifierText text={assessment.headline} identifiers={identifiers} />
           </h1>
 
           <dl className="mt-3 flex flex-wrap gap-x-10 gap-y-3 text-sm">
@@ -144,7 +147,9 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) 
 
         <div className="mt-5 border-l-2 border-foreground pl-4 lg:ml-8 lg:mt-0 lg:self-start">
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Recommended action</p>
-          <p className="mt-2 text-sm leading-6">{assessment.recommendedAction}</p>
+          <p className="mt-2 text-sm leading-6">
+            <IdentifierText text={assessment.recommendedAction} identifiers={identifiers} />
+          </p>
         </div>
       </section>
 
@@ -251,13 +256,18 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) 
 }
 
 function LegacyAssessment({ assessment }: { assessment: AssessmentViewV3 }) {
+  const identifiers = assessmentIdentifiers(assessment);
   return (
     <div className="mx-auto max-w-3xl space-y-6 py-6">
       <Alert>
         <RotateCw aria-hidden="true" />
-        <AlertTitle>{assessment.headline}</AlertTitle>
+        <AlertTitle>
+          <IdentifierText text={assessment.headline} identifiers={identifiers} />
+        </AlertTitle>
         <AlertDescription className="mt-2 space-y-2">
-          <p>{assessment.recommendedAction}</p>
+          <p>
+            <IdentifierText text={assessment.recommendedAction} identifiers={identifiers} />
+          </p>
           <p>No lineage or explanation was reconstructed from legacy free-form evidence.</p>
         </AlertDescription>
       </Alert>

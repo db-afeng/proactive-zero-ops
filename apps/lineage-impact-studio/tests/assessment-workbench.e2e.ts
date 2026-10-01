@@ -397,6 +397,16 @@ test('shows table-level consumer counts and keeps duplicate impact nodes synchro
   await expect(indirectLinks.getByRole('listitem').filter({ hasText: 'Portfolio risk notebook' })).toContainText(
     'Via proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_loss'
   );
+  for (const kind of ['query', 'dashboard', 'genie', 'notebook', 'pipeline']) {
+    await expect(consumers.locator(`img[src="/consumer-icons/${kind}.svg"]`)).toHaveCount(1);
+  }
+  await expect(
+    page.getByRole('button', { name: `Hide observed consumers of ${LOAN_EXPOSURE_ASSET}` }).locator('code.identifier-code')
+  ).toHaveCount(2);
+  await expect(
+    indirectLinks.getByRole('listitem').filter({ hasText: 'Portfolio risk notebook' }).locator('code.identifier-code')
+  ).toHaveText('proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_loss');
+  await expect(consumers).toHaveScreenshot('pr4-observed-consumers.png', { animations: 'disabled' });
 
   const effectiveRow = page.getByRole('button', { name: /Inspect direct impact on .*effective_ead/ });
   const utilizationRow = page.getByRole('button', { name: /Inspect direct impact on .*utilization_ratio/ });

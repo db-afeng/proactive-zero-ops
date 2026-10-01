@@ -28,6 +28,7 @@ import { Focus, LocateFixed } from 'lucide-react';
 import { useMemo, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 
 import type { AssessmentChange, AssessmentGraphEdge, AssessmentGraphNode, AssessmentImpact } from '@/lib/contracts';
+import { CodeIdentifier } from '@/components/CodeIdentifier';
 
 import { operationLabel } from './impact-copy';
 import { usageCount, type UsageCountDisplay, type UsageLoadState } from './usage-model';
@@ -226,8 +227,8 @@ function ImpactNode({ data, selected }: NodeProps<FlowNode>) {
           </Badge>
         )}
       </div>
-      <p className="mt-0.5 truncate font-mono text-sm font-medium leading-5" title={node.label}>
-        {node.label}
+      <p className="mt-0.5 truncate text-sm font-medium leading-5" title={node.label}>
+        {node.asset === undefined && node.column === undefined ? node.label : <CodeIdentifier value={node.label} />}
       </p>
       <p className="truncate text-xs leading-4 text-muted-foreground" title={data.detail}>
         {data.detail}
