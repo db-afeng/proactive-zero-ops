@@ -5,7 +5,7 @@ import { parseRestrictedAssessmentEnvelope } from './restricted-envelope';
 
 const reference = 'lgr_0123456789abcdefghijklmnopqrstuv';
 
-function envelope(options?: { unrelatedEdge?: boolean; legacy?: boolean }) {
+function envelope(options?: { unrelatedEdge?: boolean; legacy?: boolean; incomplete?: boolean }) {
   const display = {
     schema_version: 1,
     headline: 'balance is now text, but exposure still performs arithmetic.',
@@ -70,14 +70,34 @@ function envelope(options?: { unrelatedEdge?: boolean; legacy?: boolean }) {
       ? { result: { status: 'block', summary: 'do not reconstruct this' } }
       : {
           result: {
-            status: 'block',
+            status: options?.incomplete ? 'error' : 'block',
             severity: 'high',
             confidence: 0.95,
             summary: 'raw model prose remains server-side',
-            assessment_complete: true,
-            discovery_certainty: 'complete',
+            assessment_complete: !options?.incomplete,
+            discovery_certainty: options?.incomplete ? 'incomplete' : 'complete',
           },
           display_evidence: display,
+          ...(options?.incomplete
+            ? {
+                discovery: {
+                  proposed_code_dependencies: [
+                    {
+                      source_table: 'catalog.schema.consumer',
+                      target_table: 'catalog.schema.gold',
+                      origin: 'proposed_code',
+                      level: 'table',
+                    },
+                    {
+                      source_table: 'catalog.schema.gold',
+                      target_table: 'catalog.schema.dashboard',
+                      origin: 'proposed_code',
+                      level: 'table',
+                    },
+                  ],
+                },
+              }
+            : {}),
           identity_semantics: { assessment_principal: 'service_principal', on_behalf_of_user: false },
         },
   });
@@ -104,6 +124,21 @@ describe('projectRestrictedEvidence', () => {
 
   it('rejects an edge that is not part of a verified impact path', () => {
     expect(() => projectRestrictedEvidence(envelope({ unrelatedEdge: true }))).toThrow(EvidenceProjectionError);
+  });
+
+  it('shows code-derived transitive paths as potential impacts when assessment is incomplete', () => {
+    const projected = projectRestrictedEvidence(envelope({ incomplete: true }));
+    expect(projected.detailState).toBe('available');
+    if (projected.detailState !== 'available') return;
+    expect(
+      projected.display.impacts.map((impact) => [impact.target_asset, impact.relation, impact.evidence_level])
+    ).toEqual([
+      ['catalog.schema.consumer', 'direct', 'definition'],
+      ['catalog.schema.gold', 'transitive', 'definition'],
+      ['catalog.schema.dashboard', 'transitive', 'definition'],
+    ]);
+    expect(projected.display.edges[projected.display.edges.length - 1]?.origins).toEqual(['proposed_code']);
+    expect(projected.uniqueAssets.map((asset) => asset.reference)).toContain('catalog.schema.dashboard');
   });
 });
 

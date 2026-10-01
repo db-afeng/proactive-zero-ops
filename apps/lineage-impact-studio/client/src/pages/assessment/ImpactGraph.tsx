@@ -56,6 +56,7 @@ export function ImpactGraph({
   impacts,
   changes,
   usage,
+  incomplete,
   selectedId,
   onSelect,
 }: {
@@ -64,12 +65,17 @@ export function ImpactGraph({
   impacts: AssessmentImpact[];
   changes: AssessmentChange[];
   usage: UsageLoadState;
+  incomplete: boolean;
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
   const layout = useMemo(
     () => layoutGraph(nodes, edges, impacts, changes, usage),
     [nodes, edges, impacts, changes, usage]
+  );
+  const nodeTypes = useMemo(
+    () => ({ impact: (props: NodeProps<FlowNode>) => <ImpactNode {...props} incomplete={incomplete} /> }),
+    [incomplete]
   );
 
   function selectFromKeyboard(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -95,7 +101,7 @@ export function ImpactGraph({
           <ReactFlow<FlowNode, FlowEdge>
             nodes={layout.nodes.map((node) => ({ ...node, selected: node.id === selectedId }))}
             edges={layout.edges.map((edge) => ({ ...edge, selected: edge.id === selectedId }))}
-            nodeTypes={{ impact: ImpactNode }}
+            nodeTypes={nodeTypes}
             edgeTypes={{ evidence: EvidenceEdge }}
             onNodeClick={(_event, node) => onSelect(node.id)}
             onEdgeClick={(_event, edge) => onSelect(edge.id)}
@@ -182,12 +188,12 @@ function GraphControls({ changedNodeId }: { changedNodeId?: string }) {
   );
 }
 
-function ImpactNode({ data, selected }: NodeProps<FlowNode>) {
+function ImpactNode({ data, selected, incomplete }: NodeProps<FlowNode> & { incomplete: boolean }) {
   const node = data.graphNode;
   const roleLabel = {
     changed: 'Proposed contract change',
-    direct_break: 'Direct break',
-    transitive_impact: 'Transitive impact',
+    direct_break: incomplete ? 'Potential direct break' : 'Direct break',
+    transitive_impact: incomplete ? 'Potential transitive impact' : 'Transitive impact',
     context: 'Supporting context',
     restricted: 'Restricted lineage',
   }[node.role];

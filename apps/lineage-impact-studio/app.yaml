@@ -14,5 +14,7 @@ env:
     valueFrom: github-client-secret
   - name: GITHUB_REDIRECT_URI
     value: https://lineage-impact-studio-7474650525906616.aws.databricksapps.com/api/github/oauth/callback
-  - name: OMNIGENT_MODEL_OVERRIDE
-    value: gpt-5.6-terra
+  - name: DATABRICKS_FIX_OAUTH_REDIRECT_URI
+    value: https://lineage-impact-studio-7474650525906616.aws.databricksapps.com/api/databricks/oauth/callback
+  - name: DATABRICKS_FIX_OAUTH_CLIENT_ID
+    value: ccbe07cf-be97-46f4-adfb-c0e3c3e205be

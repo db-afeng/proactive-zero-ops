@@ -100,6 +100,16 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) 
           <AlertDescription>Re-run the assessment before relying on this impact decision.</AlertDescription>
         </Alert>
       ) : null}
+      {assessment.status === 'error' ? (
+        <Alert className="m-4 shrink-0 border-warning/50 md:mx-6">
+          <CircleAlert className="text-warning" aria-hidden="true" />
+          <AlertTitle>Downstream assessment incomplete</AlertTitle>
+          <AlertDescription>
+            The map includes paths found in parsed code. Transitive impacts on those paths are potential until lineage
+            and compatibility checks complete. Re-run the assessment before merging.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <section
         aria-labelledby="assessment-summary-title"
@@ -213,6 +223,7 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) 
                     impacts={assessment.impacts}
                     changes={assessment.changes}
                     usage={usage}
+                    incomplete={assessment.status === 'error'}
                     selectedId={selectedId}
                     onSelect={selectGraphElement}
                   />
@@ -228,6 +239,7 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) 
             </h2>
             <ImpactList
               impacts={visible.impacts}
+              incomplete={assessment.status === 'error'}
               usage={usage}
               selectedId={selectedId}
               expandedAsset={expandedAsset}

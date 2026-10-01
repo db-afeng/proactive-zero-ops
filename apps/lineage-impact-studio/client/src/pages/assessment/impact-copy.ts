@@ -18,7 +18,9 @@ export function reasonText(impact: AssessmentImpact) {
     case 'semantic_change':
       return 'The value remains available, but its meaning changes for this consumer.';
     case 'upstream_failure':
-      return 'A verified upstream break can prevent this transitive consumer from updating.';
+      return impact.evidenceLevel === 'definition'
+        ? 'Parsed code shows a downstream dependency on the affected consumer. Runtime impact is still unconfirmed.'
+        : 'An upstream break can prevent this transitive consumer from updating.';
     case 'manual_review':
       return 'The available evidence is not specific enough to determine compatibility automatically.';
   }

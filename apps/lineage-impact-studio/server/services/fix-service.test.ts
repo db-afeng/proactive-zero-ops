@@ -152,7 +152,7 @@ describe('FixService failure handling', () => {
     );
   });
 
-  it('binds the automatic runner to the caller-owned Git credential', async () => {
+  it('binds a caller-owned Git credential without creating or deleting an app credential', async () => {
     const queued = session('queued');
     const running = session(
       'running',
@@ -162,6 +162,7 @@ describe('FixService failure handling', () => {
     const repository = testRepository();
     vi.spyOn(repository, 'createOmnigentSession').mockResolvedValue(queued);
     vi.spyOn(repository, 'transitionOmnigentSession').mockResolvedValue(running);
+    const attach = vi.spyOn(repository, 'attachGitCredential').mockResolvedValue();
     const github = testGitHub();
     vi.spyOn(github, 'getValidatedPullRequest').mockResolvedValue(pull);
     const omnigent = testOmnigent();
@@ -176,7 +177,10 @@ describe('FixService failure handling', () => {
         error: null,
       },
     });
-    const service = new FixService(repository, github, omnigent);
+    const gitCredentials = testGitCredentials();
+    const createCredential = vi.spyOn(gitCredentials, 'create').mockResolvedValue(987654321);
+    const deleteCredential = vi.spyOn(gitCredentials, 'delete').mockResolvedValue();
+    const service = new FixService(repository, github, omnigent, gitCredentials);
 
     await service.start({
       actorSubject: ACTOR,
@@ -192,6 +196,10 @@ describe('FixService failure handling', () => {
       oboToken: 'ci-obo-token',
       allowServicePrincipalFallback: false,
     });
+    await service.releaseSessionGitCredential(ACTOR, { ...running, status: 'complete' });
+    expect(attach).not.toHaveBeenCalled();
+    expect(createCredential).not.toHaveBeenCalled();
+    expect(deleteCredential).not.toHaveBeenCalled();
   });
 
   it('creates and later removes an app-owned Git credential for a Fix tab retry', async () => {
@@ -335,6 +343,27 @@ describe('FixService failure handling', () => {
       })
     ).resolves.toEqual(failed);
     expect(getPull).not.toHaveBeenCalled();
+  });
+
+  it('keeps a manual session active when its short-lived user authorization must be renewed', async () => {
+    const running = session('running', 'Omnigent is proposing a fix.', 'provider-session');
+    const repository = testRepository();
+    const transition = vi.spyOn(repository, 'transitionOmnigentSession');
+    const omnigent = testOmnigent();
+    vi.spyOn(omnigent, 'getSession').mockRejectedValue(new OmnigentIntegrationError('forbidden', 403));
+    const service = new FixService(repository, testGitHub(), omnigent);
+
+    await expect(
+      service.synchronize({
+        actorSubject: ACTOR,
+        session: running,
+        assessment,
+        credential,
+        omnigentAuth: { oboToken: 'user-token', allowServicePrincipalFallback: false },
+        propagateAuthFailure: true,
+      })
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    expect(transition).not.toHaveBeenCalled();
   });
 
   it('publishes the validated patch on a deterministic proposal branch before completion', async () => {

@@ -7,6 +7,7 @@ import type {
 } from './restricted-envelope';
 
 const MAX_UNIQUE_ASSETS = 500;
+const MAX_STATIC_PATH_DEPTH = 5;
 
 const AssetReferenceSchema = z
   .string()
@@ -19,6 +20,15 @@ const AssetReferenceSchema = z
       parts.every((part) => part.length > 0 && part.length <= 255 && /^[A-Za-z0-9_][A-Za-z0-9_-]*$/u.test(part))
     );
   }, 'Invalid Unity Catalog asset reference');
+const ProposedCodeDependencySchema = z.object({
+  source_table: AssetReferenceSchema,
+  target_table: AssetReferenceSchema,
+  origin: z.literal('proposed_code'),
+  level: z.enum(['table', 'column']),
+});
+const StaticDiscoverySchema = z.object({
+  proposed_code_dependencies: z.array(ProposedCodeDependencySchema).max(500),
+});
 
 export interface ProjectedAsset {
   reference: string;
@@ -63,14 +73,16 @@ export function projectRestrictedEvidence(envelope: RestrictedAssessmentEnvelope
         uniqueAssets: [],
       };
     }
-    validateGrounding(envelope);
+    validateGrounding(envelope.evidence.display_evidence);
+    const display = addPotentialTransitiveImpacts(envelope);
+    validateGrounding(display);
     const references = new Set<string>();
-    for (const change of envelope.evidence.display_evidence.changes) references.add(change.asset);
-    for (const impact of envelope.evidence.display_evidence.impacts) {
+    for (const change of display.changes) references.add(change.asset);
+    for (const impact of display.impacts) {
       references.add(impact.target_asset);
       for (const reference of impact.path) references.add(reference);
     }
-    for (const edge of envelope.evidence.display_evidence.edges) {
+    for (const edge of display.edges) {
       references.add(edge.source_asset);
       references.add(edge.target_asset);
     }
@@ -82,7 +94,7 @@ export function projectRestrictedEvidence(envelope: RestrictedAssessmentEnvelope
       interpretationConfidence: envelope.evidence.result.confidence,
       discoveryCertainty: envelope.evidence.result.discovery_certainty,
       assessmentComplete: envelope.evidence.result.assessment_complete,
-      display: envelope.evidence.display_evidence,
+      display,
       uniqueAssets: [...references].sort().map((reference) => ({ reference, assetType: 'unknown' })),
     };
   } catch (error) {
@@ -104,8 +116,7 @@ export function splitAssetReference(reference: string): {
   return { catalogName, schemaName, assetName };
 }
 
-function validateGrounding(envelope: RestrictedAssessmentEnvelopeV3): void {
-  const display = envelope.evidence.display_evidence;
+function validateGrounding(display: DisplayEvidence): void {
   const changes = new Map(display.changes.map((change) => [change.id, change]));
   const requiredPairs = new Set<string>();
   for (const impact of display.impacts) {
@@ -132,6 +143,103 @@ function validateGrounding(envelope: RestrictedAssessmentEnvelopeV3): void {
   for (const pair of requiredPairs) {
     if (!observedPairs.has(pair)) throw new EvidenceProjectionError();
   }
+}
+
+/** Show parsed code paths when the remote assessment failed, without claiming observed lineage. */
+function addPotentialTransitiveImpacts(envelope: RestrictedAssessmentEnvelopeV3): DisplayEvidence {
+  const display = envelope.evidence.display_evidence;
+  if (envelope.evidence.result.assessment_complete) return display;
+  const discovery = StaticDiscoverySchema.safeParse(envelope.evidence.discovery);
+  if (!discovery.success) return display;
+
+  const adjacency = new Map<string, Set<string>>();
+  for (const dependency of discovery.data.proposed_code_dependencies) {
+    const source = dependency.source_table.toLowerCase();
+    const target = dependency.target_table.toLowerCase();
+    const next = adjacency.get(source) ?? new Set<string>();
+    next.add(target);
+    adjacency.set(source, next);
+  }
+
+  const impacts = [...display.impacts];
+  const edges = [...display.edges];
+  const impactIds = new Set(impacts.map((impact) => impact.id));
+  const edgeIds = new Set(edges.map((edge) => edge.id));
+  const edgePairs = new Set(edges.map((edge) => edgeKey(edge.source_asset, edge.target_asset)));
+  for (const change of display.changes) {
+    const existingTargets = new Set(
+      impacts.filter((impact) => impact.change_id === change.id).map((impact) => impact.target_asset)
+    );
+    const directBreaks = impacts.filter(
+      (impact) =>
+        impact.change_id === change.id &&
+        impact.relation === 'direct' &&
+        impact.path.length === 2 &&
+        impact.path[0] === change.asset &&
+        impact.reason !== 'semantic_change' &&
+        impact.reason !== 'manual_review'
+    );
+    const queue = directBreaks.map((impact) => impact.path);
+    const visited = new Set(queue.map((path) => path.join('\u0000')));
+    while (queue.length > 0 && impacts.length < 500 && edges.length < 500) {
+      const path = queue.shift();
+      if (path === undefined || path.length - 1 >= MAX_STATIC_PATH_DEPTH) continue;
+      for (const target of [...(adjacency.get(path[path.length - 1]) ?? [])].sort()) {
+        if (path.includes(target)) continue;
+        const nextPath = [...path, target];
+        const key = nextPath.join('\u0000');
+        if (visited.has(key)) continue;
+        visited.add(key);
+        if (queue.length < 500) queue.push(nextPath);
+        if (existingTargets.has(target)) continue;
+        const missingPairs = nextPath
+          .slice(1)
+          .filter((destination, index) => !edgePairs.has(edgeKey(nextPath[index], destination))).length;
+        if (edges.length + missingPairs > 500) return { ...display, impacts, edges };
+        existingTargets.add(target);
+        const id = nextIdentifier('impact', impactIds);
+        impacts.push({
+          id,
+          change_id: change.id,
+          relation: 'transitive',
+          target_asset: target,
+          target_column: null,
+          operation: 'unknown',
+          reason: 'upstream_failure',
+          evidence_level: 'definition',
+          path: nextPath,
+          target_expression: null,
+          remediation: 'restore_contract',
+        });
+        for (let index = 0; index < nextPath.length - 1; index += 1) {
+          const source = nextPath[index];
+          const destination = nextPath[index + 1];
+          const pair = edgeKey(source, destination);
+          if (edgePairs.has(pair)) continue;
+          edgePairs.add(pair);
+          edges.push({
+            id: nextIdentifier('edge', edgeIds),
+            source_asset: source,
+            target_asset: destination,
+            source_column: null,
+            target_column: null,
+            level: 'table',
+            origins: ['proposed_code'],
+            last_observed_at: null,
+          });
+        }
+      }
+    }
+  }
+  return { ...display, impacts, edges };
+}
+
+function nextIdentifier(prefix: string, used: Set<string>): string {
+  let index = used.size + 1;
+  while (used.has(`${prefix}-${index}`)) index += 1;
+  const id = `${prefix}-${index}`;
+  used.add(id);
+  return id;
 }
 
 function legacyStatus(evidence: unknown): 'pass' | 'warn' | 'block' | 'error' {

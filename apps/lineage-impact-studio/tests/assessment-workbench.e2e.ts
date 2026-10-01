@@ -697,6 +697,26 @@ test('supports keyboard navigation across the persistent workbench tabs', async 
   await expect(page.getByRole('heading', { name: 'Commit audit' })).toBeVisible();
 });
 
+test('asks for separate Databricks authorization before a manual fix', async ({ page }) => {
+  await page.unroute('**/api/capabilities');
+  await page.route('**/api/capabilities', async (route) => {
+    await fulfillJson(route, {
+      omnigent: {
+        available: false,
+        authorizationRequired: true,
+        reason: 'Connect Databricks to authorize Omnigent as your user before starting a manual fix.',
+      },
+    });
+  });
+  await page.goto(`/assessments/${REFERENCE}#fix`);
+
+  await expect(page.getByText('This connection requests All APIs authorization')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Connect Databricks for fixes' })).toHaveAttribute(
+    'href',
+    `/api/databricks/oauth/login?returnTo=${encodeURIComponent(`/assessments/${REFERENCE}#fix`)}`
+  );
+});
+
 test('keeps the assessment usable without horizontal page overflow at desktop and narrow widths', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/assessments/${REFERENCE}`);
@@ -896,6 +916,25 @@ test('shows stale and empty evidence states without inventing impacts', async ({
   await page.goto(`/assessments/${REFERENCE}`);
   await expect(page.getByText('Assessment is stale', { exact: true })).toBeVisible();
   await expect(page.getByText('No verified causal graph is available', { exact: true })).toBeVisible();
+});
+
+test('labels code-derived transitive paths as potential when assessment is incomplete', async ({ page }) => {
+  await page.unroute('**/api/assessments/*');
+  await page.route(`**/api/assessments/${REFERENCE}`, async (route) => {
+    await fulfillJson(route, {
+      ...assessment,
+      status: 'error',
+      severity: 'none',
+      confidence: { interpretation: 0, discovery: 'incomplete' },
+      impacts: assessment.impacts.map((impact) =>
+        impact.relation === 'transitive' ? { ...impact, evidenceLevel: 'definition' } : impact
+      ),
+    });
+  });
+  await page.goto(`/assessments/${REFERENCE}`);
+  await expect(page.getByText('Downstream assessment incomplete')).toBeVisible();
+  await expect(page.getByLabel('Potential transitive impact: portfolio_expected_loss')).toBeVisible();
+  await expect(page.getByText('Potential transitive', { exact: true })).toBeVisible();
 });
 
 test('progresses slow loading to an actionable timeout', async ({ page }) => {

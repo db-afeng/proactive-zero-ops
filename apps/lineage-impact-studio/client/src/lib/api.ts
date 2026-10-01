@@ -125,6 +125,14 @@ export function githubLoginUrl(returnTo: string) {
   return `/api/github/login?returnTo=${encodeURIComponent(returnTo)}`;
 }
 
+export function databricksFixLoginUrl(returnTo: string) {
+  return `/api/databricks/oauth/login?returnTo=${encodeURIComponent(returnTo)}`;
+}
+
+export function disconnectDatabricksFixAuthorization(): Promise<{ connected: false }> {
+  return requestJson<{ connected: false }>('/api/databricks/oauth/disconnect', { method: 'POST' });
+}
+
 export function disconnectGitHub(): Promise<GitHubConnection> {
   return requestJson<GitHubConnection>('/api/github/disconnect', { method: 'POST' });
 }

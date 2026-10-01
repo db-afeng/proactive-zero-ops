@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from lineage_guard.bundle import BundleResource, ResourceChange
-from lineage_guard.cli import assess
+from lineage_guard.cli import _assessment_context, assess
 from lineage_guard.config import GuardConfig
 from lineage_guard.lineage import LineageGraph
 from lineage_guard.models import LineageEdge
@@ -182,3 +182,22 @@ def test_public_outputs_have_identical_allowlisted_information(
     assert str(public["assessment_reference"]) in markdown
     assert str(public["message"]) in markdown
     assert "SENSITIVE_ASSET_METADATA" not in markdown
+
+
+def test_large_observed_edge_list_uses_verified_paths_without_duplicate_edges() -> None:
+    candidate = changes(SOURCE)
+    graph = LineageGraph(
+        [
+            LineageEdge(
+                source_table=SOURCE,
+                target_table=f"main.gold.consumer_{index}",
+                level="table",
+            )
+            for index in range(400)
+        ]
+    )
+
+    context = _assessment_context(candidate, graph, graph, 2)
+
+    assert context["dependencies"]["observed_prior_executions"] == []
+    assert len(context["verified_dependency_paths"]) == 400

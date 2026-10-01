@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { GitHubIntegrationError } from '../integrations/github/errors';
+import { DatabricksFixOAuthError } from '../integrations/databricks/fix-oauth-client';
 import { PersistenceError } from '../persistence/repository';
 import { OboAuthorizationError } from '../security/obo';
 import { isFailedAssessmentStatus, latestVisibleFixSession, oauthCallbackFailureCode } from './studio-routes';
@@ -10,6 +11,9 @@ describe('OAuth callback diagnostics', () => {
     expect(oauthCallbackFailureCode(new OboAuthorizationError())).toBe('obo_required');
     expect(oauthCallbackFailureCode(new GitHubIntegrationError('oauth_exchange_failed'))).toBe(
       'github_oauth_exchange_failed'
+    );
+    expect(oauthCallbackFailureCode(new DatabricksFixOAuthError('identity_mismatch'))).toBe(
+      'databricks_identity_mismatch'
     );
     expect(oauthCallbackFailureCode(new PersistenceError('invalid_oauth_attempt'))).toBe(
       'persistence_invalid_oauth_attempt'

@@ -7,6 +7,12 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -21,12 +27,14 @@ import {
   AlertCircle,
   Ban,
   CheckCircle2,
+  ChevronDown,
   CircleAlert,
   CircleDashed,
   Clipboard,
   ExternalLink,
   FileCode2,
   Github,
+  KeyRound,
   Link2Off,
   RotateCw,
   ShieldAlert,
@@ -39,6 +47,8 @@ import { MonacoDiff } from '@/components/MonacoDiff';
 import {
   ApiRequestError,
   createFixSession,
+  databricksFixLoginUrl,
+  disconnectDatabricksFixAuthorization,
   disconnectGitHub,
   getAssessmentFixSession,
   getCapabilities,
@@ -75,7 +85,11 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
   const [patch, setPatch] = useState<Loadable<ValidatedPatch>>({ kind: 'idle' });
   const [selectedPath, setSelectedPath] = useState<string>();
   const [actionPending, setActionPending] = useState(false);
-  const [actionError, setActionError] = useState<string>();
+  const [actionError, setActionError] = useState<string | undefined>(() =>
+    new URLSearchParams(window.location.search).get('fixAuth') === 'failed'
+      ? 'Databricks authorization for manual fixes did not complete. Try connecting again.'
+      : undefined
+  );
   const [permissionLost, setPermissionLost] = useState(false);
   const [staleHead, setStaleHead] = useState(false);
 
@@ -137,7 +151,10 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
     session?.id,
     shouldPoll,
     (updatedSession) => setSession(updatedSession),
-    (error) => handleScopedError(error, setPermissionLost, setStaleHead, setActionError)
+    (error) => {
+      requireDatabricksReconnect(error);
+      handleScopedError(error, setPermissionLost, setStaleHead, setActionError);
+    }
   );
 
   useEffect(() => {
@@ -164,6 +181,40 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
   }, [active, session?.id, session?.status]);
 
   const omnigent = capabilities.kind === 'ready' ? capabilities.value.omnigent : undefined;
+  const databricksReturnTo = `/assessments/${encodeURIComponent(assessment.reference)}#fix`;
+  function requireDatabricksReconnect(error: unknown) {
+    if (error instanceof ApiRequestError && error.code === 'DATABRICKS_FIX_AUTH_REQUIRED') {
+      setCapabilities({
+        kind: 'ready',
+        value: {
+          omnigent: { available: false, authorizationRequired: true, reason: error.message },
+        },
+      });
+    }
+  }
+
+  async function disconnectDatabricks() {
+    setActionPending(true);
+    setActionError(undefined);
+    try {
+      await disconnectDatabricksFixAuthorization();
+      setCapabilities({
+        kind: 'ready',
+        value: {
+          omnigent: {
+            available: false,
+            authorizationRequired: true,
+            reason: 'Connect Databricks to authorize Omnigent as your user before starting a manual fix.',
+          },
+        },
+      });
+    } catch (error) {
+      handleScopedError(error, setPermissionLost, setStaleHead, setActionError);
+    } finally {
+      setActionPending(false);
+    }
+  }
+
   async function disconnect() {
     setActionPending(true);
     setActionError(undefined);
@@ -191,6 +242,7 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
       setPatch({ kind: 'idle' });
       setSelectedPath(undefined);
     } catch (error) {
+      requireDatabricksReconnect(error);
       handleScopedError(error, setPermissionLost, setStaleHead, setActionError);
     } finally {
       setActionPending(false);
@@ -214,17 +266,26 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
             Propose a fix
           </h1>
           <p className="mt-1 max-w-[72ch] text-sm leading-6 text-muted-foreground">
-            A failed GitHub check starts an isolated Omnigent proposal. You can retry a failed session with your
-            connected GitHub account. Generated changes are validated and committed to a separate proposal branch.
+            A failed GitHub check starts a separate automatic Omnigent proposal. Manual fixes use your Databricks fix
+            access and saved workspace Git credential to run Omnigent, and your GitHub connection to publish a validated
+            proposal branch.
           </p>
         </div>
-        <GitHubConnectionControl
-          state={github}
-          assessment={assessment}
-          disabled={actionPending}
-          onDisconnect={() => void disconnect()}
-          onRetry={() => setPrerequisiteRetry((value) => value + 1)}
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <GitHubConnectionStatus
+            state={github}
+            assessment={assessment}
+            onRetry={() => setPrerequisiteRetry((value) => value + 1)}
+          />
+          <FixConnectionsMenu
+            github={github}
+            databricksConnected={omnigent?.available === true}
+            disabled={actionPending}
+            databricksDisconnectDisabled={shouldPoll}
+            onDisconnectGitHub={() => void disconnect()}
+            onDisconnectDatabricks={() => void disconnectDatabricks()}
+          />
+        </div>
       </div>
 
       {assessment.source.freshness !== 'current' || staleHead ? (
@@ -251,7 +312,23 @@ export function FixTab({ assessment, active }: { assessment: AssessmentViewV3; a
         <Alert>
           <Ban aria-hidden="true" />
           <AlertTitle>Fix generation is unavailable</AlertTitle>
-          <AlertDescription>{omnigent.reason ?? 'Omnigent is not available in this workspace.'}</AlertDescription>
+          <AlertDescription className="space-y-3">
+            <p>{omnigent.reason ?? 'Omnigent is not available in this workspace.'}</p>
+            {omnigent.authorizationRequired ? (
+              <>
+                <p>
+                  This connection requests All APIs authorization because Omnigent has no supported app user scope. The
+                  app uses it only for manual fixes, and it expires within one hour.
+                </p>
+                <Button asChild variant="outline" size="sm">
+                  <a href={databricksFixLoginUrl(databricksReturnTo)}>
+                    <KeyRound aria-hidden="true" />
+                    Connect Databricks for fixes
+                  </a>
+                </Button>
+              </>
+            ) : null}
+          </AlertDescription>
         </Alert>
       ) : null}
 
@@ -366,17 +443,13 @@ function AutomaticFixLookup({
   );
 }
 
-function GitHubConnectionControl({
+function GitHubConnectionStatus({
   state,
   assessment,
-  disabled,
-  onDisconnect,
   onRetry,
 }: {
   state: Loadable<GitHubConnection>;
   assessment: AssessmentViewV3;
-  disabled: boolean;
-  onDisconnect: () => void;
   onRetry: () => void;
 }) {
   if (state.kind === 'idle' || state.kind === 'loading') {
@@ -408,12 +481,56 @@ function GitHubConnectionControl({
     <div className="flex items-center gap-2 text-sm">
       <Github className="size-4 text-muted-foreground" aria-hidden="true" />
       <span>
-        Connected as <strong>{state.value.login ?? 'GitHub user'}</strong>
+        GitHub connected as <strong>{state.value.login ?? 'GitHub user'}</strong>
       </span>
-      <Button variant="ghost" size="sm" disabled={disabled} onClick={onDisconnect}>
-        Disconnect
-      </Button>
     </div>
+  );
+}
+
+function FixConnectionsMenu({
+  github,
+  databricksConnected,
+  disabled,
+  databricksDisconnectDisabled,
+  onDisconnectGitHub,
+  onDisconnectDatabricks,
+}: {
+  github: Loadable<GitHubConnection>;
+  databricksConnected: boolean;
+  disabled: boolean;
+  databricksDisconnectDisabled: boolean;
+  onDisconnectGitHub: () => void;
+  onDisconnectDatabricks: () => void;
+}) {
+  const githubConnected = github.kind === 'ready' && github.value.connected;
+  if (!githubConnected && !databricksConnected) return null;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="sm" disabled={disabled}>
+          <KeyRound aria-hidden="true" />
+          Manage connections
+          <ChevronDown aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuLabel>Manual fix connections</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {githubConnected ? (
+          <DropdownMenuItem onSelect={onDisconnectGitHub}>
+            <Github aria-hidden="true" />
+            Disconnect GitHub
+          </DropdownMenuItem>
+        ) : null}
+        {databricksConnected ? (
+          <DropdownMenuItem disabled={databricksDisconnectDisabled} onSelect={onDisconnectDatabricks}>
+            <KeyRound aria-hidden="true" />
+            Disconnect Databricks fix access
+          </DropdownMenuItem>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -840,6 +957,10 @@ function handleScopedError(
   setMessage: (message?: string) => void
 ) {
   if (error instanceof ApiRequestError) {
+    if (error.code === 'GIT_CREDENTIAL_ACCESS_DENIED') {
+      setMessage(error.message);
+      return;
+    }
     if (error.status === 401 || error.status === 403) {
       setPermissionLost(true);
       return;

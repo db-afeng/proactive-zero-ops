@@ -86,7 +86,6 @@ def _compact_statement(statement: Any) -> dict[str, Any]:
             }
             for item in statement.expectations
         ],
-        "source_evidence": statement.evidence_sql,
     }
 
 
@@ -185,7 +184,11 @@ def _assessment_context(
             "observed_prior_executions": [_compact_edge(edge) for edge in observed.edges],
         },
         "verified_dependency_paths": [
-            {"assets": path, "hops": verified.path_evidence(path)} for path in paths
+            {
+                "assets": path,
+                "hop_origins": [hop["origins"] for hop in verified.path_evidence(path)],
+            }
+            for path in paths
         ],
         "downstream_definitions_from_proposed_repository": _downstream_definitions(
             changes, verified
@@ -198,6 +201,11 @@ def _assessment_context(
         },
     }
     serialized = json.dumps(context, sort_keys=True, default=str)
+    if len(serialized) > MAX_CONTEXT_CHARACTERS:
+        # Each verified path already names its hops and their provenance. Raw
+        # observed edges duplicate that information and can grow with usage.
+        context["dependencies"]["observed_prior_executions"] = []
+        serialized = json.dumps(context, sort_keys=True, default=str)
     if len(serialized) > MAX_CONTEXT_CHARACTERS:
         raise RuntimeError(
             f"assessment context is {len(serialized)} characters, exceeding the trusted limit"

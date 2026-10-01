@@ -31,6 +31,7 @@ import {
 
 export function ImpactList({
   impacts,
+  incomplete,
   usage,
   selectedId,
   expandedAsset,
@@ -39,6 +40,7 @@ export function ImpactList({
   onRetryUsage,
 }: {
   impacts: AssessmentImpact[];
+  incomplete: boolean;
   usage: UsageLoadState;
   selectedId: string | null;
   expandedAsset: string | null;
@@ -136,7 +138,11 @@ export function ImpactList({
                         >
                           <span>
                             <Badge variant="outline" className="font-normal">
-                              {impact.relation === 'transitive' ? 'Transitive' : 'Direct'}
+                              {impact.relation === 'transitive' && incomplete
+                                ? 'Potential transitive'
+                                : impact.relation === 'transitive'
+                                  ? 'Transitive'
+                                  : 'Direct'}
                             </Badge>
                           </span>
                           <code className="min-w-0 break-all font-mono text-sm font-medium">{targetLabel(impact)}</code>

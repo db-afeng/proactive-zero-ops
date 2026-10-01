@@ -44,6 +44,7 @@ describe('Lakebase persistence bootstrap', () => {
     for (const table of [
       'oauth_attempts',
       'github_connections',
+      'databricks_fix_authorizations',
       'omnigent_sessions',
       'validated_patches',
       'fix_proposals',
@@ -59,6 +60,34 @@ describe('Lakebase persistence bootstrap', () => {
 });
 
 describe('LineageImpactRepository', () => {
+  it('encrypts short-lived manual Fix tokens and never returns expired tokens', async () => {
+    const token = 'sensitive-all-apis-user-token-123456789';
+    let encryptedValue: unknown;
+    const executor = new ScriptedExecutor([
+      (_text, params) => {
+        encryptedValue = params[1];
+        return { rows: [] };
+      },
+      () => ({ rows: [{ encrypted_access_token: encryptedValue }] }),
+      { rows: [] },
+      { rows: [] },
+    ]);
+    const repository = new LineageImpactRepository(executor, new Aes256GcmCipher(randomBytes(32)));
+    const now = new Date('2026-09-30T00:00:00.000Z');
+    await repository.saveDatabricksFixAuthorization({
+      actorSubject: ACTOR,
+      accessToken: token,
+      expiresAt: new Date('2026-09-30T01:00:00.000Z'),
+      now,
+    });
+    expect(JSON.stringify(encryptedValue)).not.toContain(token);
+    expect(await repository.loadActiveDatabricksFixToken(ACTOR, now)).toBe(token);
+    expect(executor.calls[1]?.params[1]).toBe('2026-09-30T00:02:00.000Z');
+    expect(await repository.loadActiveDatabricksFixToken(ACTOR, new Date('2026-09-30T00:59:00.000Z'))).toBeNull();
+    await repository.disconnectDatabricksFixAuthorization(ACTOR);
+    expect(executor.calls[3]?.text).toContain('DELETE FROM lineage_impact.databricks_fix_authorizations');
+  });
+
   it('stores only OAuth state digests and consumes state atomically for the same actor and binding', async () => {
     const binding = 'b'.repeat(48);
     const issued = issueOAuthAttempt({ binding, now: new Date('2026-09-28T00:00:00.000Z') });

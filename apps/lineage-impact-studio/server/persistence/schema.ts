@@ -48,6 +48,12 @@ export const LINEAGE_IMPACT_BOOTSTRAP_SQL = Object.freeze([
     connected_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS lineage_impact.databricks_fix_authorizations (
+    actor_subject TEXT PRIMARY KEY,
+    encrypted_access_token JSONB NOT NULL,
+    token_expires_at TIMESTAMPTZ NOT NULL,
+    connected_at TIMESTAMPTZ NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS lineage_impact.omnigent_sessions (
     id UUID PRIMARY KEY,
     actor_subject TEXT NOT NULL,
