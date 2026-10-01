@@ -18,14 +18,16 @@ import {
   SelectValue,
 } from '@databricks/appkit-ui/react';
 import { Check, ChevronDown, CircleAlert, RotateCw } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { ScrollFadeArea } from '@/components/ScrollFadeArea';
+import { getAssessmentUsage } from '@/lib/api';
 import type { AssessmentViewV3 } from '@/lib/contracts';
 
 import { ImpactGraph } from './ImpactGraph';
 import { ImpactInspector } from './ImpactInspector';
 import { ImpactList } from './ImpactList';
+import type { UsageLoadState } from './usage-model';
 
 type ImpactScope = 'direct' | 'all';
 
@@ -33,6 +35,38 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) 
   const [scope, setScope] = useState<ImpactScope>('all');
   const [showContext, setShowContext] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [expandedAsset, setExpandedAsset] = useState<string | null>(null);
+  const [usage, setUsage] = useState<UsageLoadState>({ kind: 'loading' });
+  const [usageRetryToken, setUsageRetryToken] = useState(0);
+
+  useEffect(() => {
+    if (assessment.detailState === 'legacy') return;
+    const controller = new AbortController();
+    void getAssessmentUsage(assessment.reference, controller.signal)
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        setUsage(
+          result.assessmentReference === assessment.reference ? { kind: 'ready', usage: result } : { kind: 'error' }
+        );
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setUsage({ kind: 'error' });
+      });
+    return () => controller.abort();
+  }, [assessment.detailState, assessment.reference, usageRetryToken]);
+
+  function selectGraphElement(id: string) {
+    setSelectedId(id);
+    const asset = assessment.graph.nodes.find((node) => node.id === id)?.asset;
+    setExpandedAsset(
+      asset !== undefined && assessment.impacts.some((impact) => impact.targetAsset === asset) ? asset : null
+    );
+  }
+
+  function expandAsset(asset: string, open: boolean) {
+    setExpandedAsset(open ? asset : null);
+    setSelectedId(null);
+  }
 
   const visible = useMemo(() => {
     const nodes = assessment.graph.nodes.filter((node) => {
@@ -173,8 +207,9 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) 
                     edges={visible.edges}
                     impacts={assessment.impacts}
                     changes={assessment.changes}
+                    usage={usage}
                     selectedId={selectedId}
-                    onSelect={setSelectedId}
+                    onSelect={selectGraphElement}
                   />
                 </div>
                 <p className="text-sm text-muted-foreground md:hidden">Select an impact below to open its evidence.</p>
@@ -186,7 +221,18 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) 
             <h2 id="impact-list-title" className="text-base font-semibold">
               Impact list
             </h2>
-            <ImpactList impacts={visible.impacts} selectedId={selectedId} onSelect={setSelectedId} />
+            <ImpactList
+              impacts={visible.impacts}
+              usage={usage}
+              selectedId={selectedId}
+              expandedAsset={expandedAsset}
+              onSelect={selectGraphElement}
+              onExpandAsset={expandAsset}
+              onRetryUsage={() => {
+                setUsage({ kind: 'loading' });
+                setUsageRetryToken((value) => value + 1);
+              }}
+            />
           </section>
 
           <ReviewContext assessment={assessment} />
@@ -194,8 +240,9 @@ export function AssessmentTab({ assessment }: { assessment: AssessmentViewV3 }) 
 
         <ImpactInspector
           assessment={assessment}
+          usage={usage}
           selectedId={selectedId}
-          onSelect={setSelectedId}
+          onSelect={selectGraphElement}
           onClose={() => setSelectedId(null)}
         />
       </div>

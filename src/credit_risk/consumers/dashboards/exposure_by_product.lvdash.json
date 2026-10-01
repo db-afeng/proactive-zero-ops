@@ -1,0 +1,125 @@
+{
+  "datasets": [
+    {
+      "name": "exposure_by_product",
+      "displayName": "Exposure by product",
+      "queryLines": [
+        "SELECT product_type, COUNT(*) AS account_count, ",
+        "CAST(SUM(drawn_exposure) AS DOUBLE) AS drawn_exposure_aud, ",
+        "CAST(SUM(effective_ead) AS DOUBLE) AS effective_ead_aud, ",
+        "CAST(AVG(utilization_ratio) AS DOUBLE) AS avg_utilization ",
+        "FROM loan_exposure GROUP BY product_type ORDER BY effective_ead_aud DESC "
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "overview",
+      "displayName": "Overview",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "title",
+            "multilineTextboxSpec": {
+              "lines": ["# Exposure by Product"]
+            }
+          },
+          "position": { "x": 0, "y": 0, "width": 12, "height": 1 }
+        },
+        {
+          "widget": {
+            "name": "context",
+            "multilineTextboxSpec": {
+              "lines": ["Synthetic Australian-dollar loan exposures, grouped by product type."]
+            }
+          },
+          "position": { "x": 0, "y": 1, "width": 12, "height": 1 }
+        },
+        {
+          "widget": {
+            "name": "ead-by-product",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "exposure_by_product",
+                  "fields": [
+                    { "name": "product_type", "expression": "product_type" },
+                    { "name": "effective_ead_aud", "expression": "effective_ead_aud" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "product_type",
+                  "scale": { "type": "categorical" }
+                },
+                "y": {
+                  "fieldName": "effective_ead_aud",
+                  "displayName": "Effective EAD (AUD)",
+                  "scale": { "type": "quantitative" },
+                  "format": { "type": "number-currency", "currencyCode": "AUD", "abbreviation": "compact" }
+                }
+              },
+              "frame": { "showTitle": true, "title": "Effective exposure at default" }
+            }
+          },
+          "position": { "x": 0, "y": 2, "width": 12, "height": 5 }
+        },
+        {
+          "widget": {
+            "name": "product-detail",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "exposure_by_product",
+                  "fields": [
+                    { "name": "product_type", "expression": "product_type" },
+                    { "name": "account_count", "expression": "account_count" },
+                    { "name": "drawn_exposure_aud", "expression": "drawn_exposure_aud" },
+                    { "name": "effective_ead_aud", "expression": "effective_ead_aud" },
+                    { "name": "avg_utilization", "expression": "avg_utilization" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "product_type", "displayName": "Product" },
+                  { "fieldName": "account_count", "displayName": "Accounts" },
+                  { "fieldName": "drawn_exposure_aud", "displayName": "Drawn (AUD)", "format": { "type": "number-currency", "currencyCode": "AUD", "abbreviation": "compact" } },
+                  { "fieldName": "effective_ead_aud", "displayName": "Effective EAD (AUD)", "format": { "type": "number-currency", "currencyCode": "AUD", "abbreviation": "compact" } },
+                  { "fieldName": "avg_utilization", "displayName": "Avg. utilization", "format": { "type": "number-percent" } }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Product detail" }
+            }
+          },
+          "position": { "x": 0, "y": 7, "width": 12, "height": 5 }
+        }
+      ]
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": { "light": "#F7FAFC", "dark": "#11171C" },
+      "widgetBackgroundColor": { "light": "#FFFFFF", "dark": "#1F272D" },
+      "fontColor": { "light": "#11171C", "dark": "#E8ECF0" },
+      "selectionColor": { "light": "#2272B4", "dark": "#8ACAFF" },
+      "visualizationColors": ["#094074", "#3C6997", "#5ADBFF", "#FFA600", "#FF7054"],
+      "widgetHeaderAlignment": "LEFT"
+    }
+  }
+}

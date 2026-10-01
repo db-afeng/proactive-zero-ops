@@ -121,6 +121,36 @@ export interface AssessmentViewV3 {
   };
 }
 
+export type UsageObjectKind = 'query' | 'dashboard' | 'genie' | 'notebook' | 'pipeline' | 'job' | 'alert';
+
+export interface AssessmentUsageObject {
+  kind: UsageObjectKind;
+  title: string;
+  url: string;
+  relation: 'direct' | 'indirect';
+  viaAssets: string[];
+  accessMode: 'read' | 'write' | 'read_write';
+  lastObservedAt: string;
+}
+
+export interface AssessmentAssetUsage {
+  asset: string;
+  count: number;
+  directCount: number;
+  indirectCount: number;
+  byType: Record<UsageObjectKind, number>;
+  complete: boolean;
+  objects: AssessmentUsageObject[];
+}
+
+export interface AssessmentUsageV1 {
+  schemaVersion: 1;
+  assessmentReference: string;
+  observedFrom: string;
+  observedThrough: string;
+  assets: AssessmentAssetUsage[];
+}
+
 export interface SourceEvidenceView {
   schemaVersion: 1;
   assessmentReference: string;

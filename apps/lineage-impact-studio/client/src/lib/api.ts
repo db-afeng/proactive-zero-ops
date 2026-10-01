@@ -1,5 +1,6 @@
 import type {
   AssessmentViewV3,
+  AssessmentUsageV1,
   AuditResponse,
   Capabilities,
   CommitOutcome,
@@ -92,6 +93,14 @@ export function getAssessment(reference: string, signal?: AbortSignal) {
       cache: 'no-store',
       signal,
     },
+    90_000
+  );
+}
+
+export function getAssessmentUsage(reference: string, signal?: AbortSignal) {
+  return requestJson<AssessmentUsageV1>(
+    `/api/assessments/${encodeURIComponent(reference)}/usage`,
+    { cache: 'no-store', signal },
     90_000
   );
 }

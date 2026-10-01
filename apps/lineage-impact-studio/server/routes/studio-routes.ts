@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 
+import { getExecutionContext } from '@databricks/appkit';
 import type { Application, Request, Response } from 'express';
 import { z } from 'zod';
 
@@ -22,7 +23,12 @@ import {
 import { bootstrapLineageImpactStore, type QueryExecutor } from '../persistence/schema';
 import { Aes256GcmCipher, decodeBase64EncryptionKey } from '../security/encryption';
 import { issueOAuthAttempt, OAUTH_COOKIE_OPTIONS } from '../security/oauth';
-import { OboAuthorizationError, optionalOboAccessToken, requireOboRequest } from '../security/obo';
+import {
+  OboAuthorizationError,
+  optionalOboAccessToken,
+  requireOboAccessToken,
+  requireOboRequest,
+} from '../security/obo';
 import { PatchPolicyError, validatePatchCandidate } from '../security/patch-policy';
 import {
   AssessmentService,
@@ -33,6 +39,12 @@ import type { UserAnalyticsExecutor } from '../services/asset-authorization';
 import { FixService } from '../services/fix-service';
 import { GitHubCredentialService } from '../services/github-credential-service';
 import { VolumeRestrictedEnvelopeReader, type VolumeReader } from '../services/restricted-envelope-reader';
+import {
+  UsageService,
+  UsageUnavailableError,
+  serializeUsageView,
+  type LineageQueryExecutor,
+} from '../services/usage-service';
 
 const OAUTH_BINDING_COOKIE = 'lineage_impact_oauth_binding';
 const OAUTH_RETURN_COOKIE = 'lineage_impact_oauth_return';
@@ -68,6 +80,7 @@ interface StudioAppKit {
   analytics: {
     asUser(request: Request): UserAnalyticsExecutor;
   };
+  serviceAnalytics: LineageQueryExecutor;
   volume: VolumeReader;
   lakebase: QueryExecutor;
   server: {
@@ -136,6 +149,33 @@ export async function setupStudioRoutes(appkit: StudioAppKit): Promise<void> {
         sendAssessmentError(response, error);
       } finally {
         recordSafeRequestMetric('assessment_view', metricStatus, startedAt);
+      }
+    });
+
+    application.get('/api/assessments/:reference/usage', async (request, response) => {
+      const startedAt = Date.now();
+      let metricStatus: SafeRequestStatus = 'failed';
+      response.set('Cache-Control', 'private, no-store');
+      try {
+        const view = await reauthorizeAssessment(assessmentService, appkit, request, request.params.reference);
+        if (view.detailState !== 'available') throw new DetailedEvidenceUnavailableError();
+        const oboToken = requireOboAccessToken(request);
+        const workspaceId = await getExecutionContext().workspaceId.catch(() => {
+          throw new UsageUnavailableError();
+        });
+        const service = new UsageService({
+          executor: appkit.serviceAnalytics,
+          workspaceHost: process.env.DATABRICKS_HOST ?? '',
+          workspaceId,
+        });
+        const usage = await service.getUsage({ view, oboToken });
+        response.type('application/json').send(serializeUsageView(usage));
+        metricStatus = 'succeeded';
+      } catch (error) {
+        metricStatus = usageMetricStatus(error);
+        sendUsageError(response, error);
+      } finally {
+        recordSafeRequestMetric('consumer_usage', metricStatus, startedAt);
       }
     });
 
@@ -891,6 +931,18 @@ function sendSourceEvidenceError(response: Response, error: unknown): void {
   sendAssessmentError(response, error);
 }
 
+function sendUsageError(response: Response, error: unknown): void {
+  if (error instanceof DetailedEvidenceUnavailableError) {
+    response.status(409).json({ code: 'USAGE_UNAVAILABLE', message: 'Live usage is unavailable for this assessment.' });
+    return;
+  }
+  if (error instanceof UsageUnavailableError) {
+    response.status(503).json({ code: 'USAGE_UNAVAILABLE', message: 'Live usage is temporarily unavailable.' });
+    return;
+  }
+  sendAssessmentError(response, error);
+}
+
 function sendFixError(response: Response, error: unknown): void {
   if (error instanceof z.ZodError || (error instanceof Error && error.message === 'invalid_guidance')) {
     response.status(400).json({ code: 'INVALID_FIX_REQUEST', message: 'The fix request is invalid.' });
@@ -1013,9 +1065,14 @@ function sourceMetricStatus(error: unknown): SafeRequestStatus {
   return assessmentMetricStatus(error);
 }
 
+function usageMetricStatus(error: unknown): SafeRequestStatus {
+  if (error instanceof UsageUnavailableError || error instanceof DetailedEvidenceUnavailableError) return 'unavailable';
+  return assessmentMetricStatus(error);
+}
+
 /** Never add references, asset names, SQL, paths, or lineage identifiers here. */
 function recordSafeRequestMetric(
-  route: 'assessment_view' | 'source_evidence',
+  route: 'assessment_view' | 'source_evidence' | 'consumer_usage',
   status: SafeRequestStatus,
   startedAt: number
 ) {

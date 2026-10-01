@@ -31,6 +31,8 @@ resources:
         started: true
       user_api_scopes:
         - sql
+        - genie
+        - workspace.workspace:read
 
       # The resources which this app has access to.
       resources:
@@ -43,6 +45,11 @@ resources:
             securable_full_name: ${var.files_id}
             securable_type: VOLUME
             permission: READ_VOLUME
+        - name: table-lineage
+          uc_securable:
+            securable_full_name: system.access.table_lineage
+            securable_type: TABLE
+            permission: SELECT
         - name: postgres
           postgres:
             branch: ${var.postgres_branch}

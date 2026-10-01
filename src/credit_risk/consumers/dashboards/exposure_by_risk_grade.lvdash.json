@@ -1,0 +1,135 @@
+{
+  "datasets": [
+    {
+      "name": "exposure_by_risk_grade",
+      "displayName": "Exposure by risk grade",
+      "queryLines": [
+        "SELECT risk_grade, COUNT(*) AS account_count, ",
+        "CAST(SUM(effective_ead) AS DOUBLE) AS effective_ead_aud, ",
+        "CAST(AVG(utilization_ratio) AS DOUBLE) AS avg_utilization, ",
+        "CAST(SUM(effective_ead * probability_of_default) / NULLIF(SUM(effective_ead), 0) AS DOUBLE) AS weighted_pd ",
+        "FROM loan_exposure GROUP BY risk_grade ORDER BY risk_grade "
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "overview",
+      "displayName": "Overview",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "title",
+            "multilineTextboxSpec": { "lines": ["# Exposure by Risk Grade"] }
+          },
+          "position": { "x": 0, "y": 0, "width": 12, "height": 1 }
+        },
+        {
+          "widget": {
+            "name": "context",
+            "multilineTextboxSpec": {
+              "lines": ["Compare effective exposure, utilization, and illustrative default probability across grades."]
+            }
+          },
+          "position": { "x": 0, "y": 1, "width": 12, "height": 1 }
+        },
+        {
+          "widget": {
+            "name": "ead-by-grade",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "exposure_by_risk_grade",
+                  "fields": [
+                    { "name": "risk_grade", "expression": "risk_grade" },
+                    { "name": "effective_ead_aud", "expression": "effective_ead_aud" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "risk_grade",
+                  "scale": { "type": "categorical", "sort": { "by": "custom-order", "orderedValues": ["A", "B", "C", "D"] } }
+                },
+                "y": {
+                  "fieldName": "effective_ead_aud",
+                  "displayName": "Effective EAD (AUD)",
+                  "scale": { "type": "quantitative" },
+                  "format": { "type": "number-currency", "currencyCode": "AUD", "abbreviation": "compact" }
+                },
+                "color": {
+                  "fieldName": "risk_grade",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      { "value": "A", "color": "#009E73" },
+                      { "value": "B", "color": "#0072B2" },
+                      { "value": "C", "color": "#E69F00" },
+                      { "value": "D", "color": "#D55E00" }
+                    ]
+                  }
+                }
+              },
+              "frame": { "showTitle": true, "title": "Effective exposure by grade" }
+            }
+          },
+          "position": { "x": 0, "y": 2, "width": 12, "height": 5 }
+        },
+        {
+          "widget": {
+            "name": "grade-detail",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "exposure_by_risk_grade",
+                  "fields": [
+                    { "name": "risk_grade", "expression": "risk_grade" },
+                    { "name": "account_count", "expression": "account_count" },
+                    { "name": "effective_ead_aud", "expression": "effective_ead_aud" },
+                    { "name": "avg_utilization", "expression": "avg_utilization" },
+                    { "name": "weighted_pd", "expression": "weighted_pd" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "risk_grade", "displayName": "Risk grade" },
+                  { "fieldName": "account_count", "displayName": "Accounts" },
+                  { "fieldName": "effective_ead_aud", "displayName": "Effective EAD (AUD)", "format": { "type": "number-currency", "currencyCode": "AUD", "abbreviation": "compact" } },
+                  { "fieldName": "avg_utilization", "displayName": "Avg. utilization", "format": { "type": "number-percent" } },
+                  { "fieldName": "weighted_pd", "displayName": "Weighted PD", "format": { "type": "number-percent" } }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Grade detail" }
+            }
+          },
+          "position": { "x": 0, "y": 7, "width": 12, "height": 5 }
+        }
+      ]
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": { "light": "#F8FAF9", "dark": "#11171C" },
+      "widgetBackgroundColor": { "light": "#FFFFFF", "dark": "#1F272D" },
+      "fontColor": { "light": "#11171C", "dark": "#E8ECF0" },
+      "selectionColor": { "light": "#0072B2", "dark": "#8ACAFF" },
+      "visualizationColors": ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#D55E00"],
+      "widgetHeaderAlignment": "LEFT"
+    }
+  }
+}

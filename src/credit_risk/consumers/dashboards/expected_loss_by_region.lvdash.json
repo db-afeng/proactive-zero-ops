@@ -1,0 +1,123 @@
+{
+  "datasets": [
+    {
+      "name": "expected_loss_by_region",
+      "displayName": "Expected loss by region",
+      "queryLines": [
+        "SELECT region, SUM(account_count) AS account_count, ",
+        "CAST(SUM(total_ead) AS DOUBLE) AS total_ead_aud, ",
+        "CAST(SUM(expected_loss) AS DOUBLE) AS expected_loss_aud, ",
+        "CAST(SUM(expected_loss) / NULLIF(SUM(total_ead), 0) AS DOUBLE) AS loss_rate ",
+        "FROM portfolio_expected_loss GROUP BY region ORDER BY expected_loss_aud DESC "
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "overview",
+      "displayName": "Overview",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "title",
+            "multilineTextboxSpec": { "lines": ["# Expected Loss by Region"] }
+          },
+          "position": { "x": 0, "y": 0, "width": 12, "height": 1 }
+        },
+        {
+          "widget": {
+            "name": "context",
+            "multilineTextboxSpec": {
+              "lines": ["Illustrative expected loss from synthetic credit-risk data. Not for lending or regulatory use."]
+            }
+          },
+          "position": { "x": 0, "y": 1, "width": 12, "height": 1 }
+        },
+        {
+          "widget": {
+            "name": "loss-by-region",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "expected_loss_by_region",
+                  "fields": [
+                    { "name": "region", "expression": "region" },
+                    { "name": "expected_loss_aud", "expression": "expected_loss_aud" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "region",
+                  "scale": { "type": "categorical" }
+                },
+                "y": {
+                  "fieldName": "expected_loss_aud",
+                  "displayName": "Expected loss (AUD)",
+                  "scale": { "type": "quantitative" },
+                  "format": { "type": "number-currency", "currencyCode": "AUD", "abbreviation": "compact" }
+                }
+              },
+              "frame": { "showTitle": true, "title": "Illustrative expected loss" }
+            }
+          },
+          "position": { "x": 0, "y": 2, "width": 12, "height": 5 }
+        },
+        {
+          "widget": {
+            "name": "region-detail",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "expected_loss_by_region",
+                  "fields": [
+                    { "name": "region", "expression": "region" },
+                    { "name": "account_count", "expression": "account_count" },
+                    { "name": "total_ead_aud", "expression": "total_ead_aud" },
+                    { "name": "expected_loss_aud", "expression": "expected_loss_aud" },
+                    { "name": "loss_rate", "expression": "loss_rate" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "region", "displayName": "Region" },
+                  { "fieldName": "account_count", "displayName": "Accounts" },
+                  { "fieldName": "total_ead_aud", "displayName": "Total EAD (AUD)", "format": { "type": "number-currency", "currencyCode": "AUD", "abbreviation": "compact" } },
+                  { "fieldName": "expected_loss_aud", "displayName": "Expected loss (AUD)", "format": { "type": "number-currency", "currencyCode": "AUD", "abbreviation": "compact" } },
+                  { "fieldName": "loss_rate", "displayName": "Loss rate", "format": { "type": "number-percent" } }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Regional detail" }
+            }
+          },
+          "position": { "x": 0, "y": 7, "width": 12, "height": 5 }
+        }
+      ]
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": { "light": "#FAF9FC", "dark": "#11171C" },
+      "widgetBackgroundColor": { "light": "#FFFFFF", "dark": "#1F272D" },
+      "fontColor": { "light": "#11171C", "dark": "#E8ECF0" },
+      "selectionColor": { "light": "#3B528B", "dark": "#8ACAFF" },
+      "visualizationColors": ["#440154", "#3B528B", "#21918C", "#5EC962", "#FDE725"],
+      "widgetHeaderAlignment": "LEFT"
+    }
+  }
+}

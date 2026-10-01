@@ -1,0 +1,57 @@
+{
+  "version": 2,
+  "config": {
+    "sample_questions": [
+      {
+        "id": "10000000000000000000000000000001",
+        "question": ["Which products have the most effective exposure at default?"]
+      },
+      {
+        "id": "10000000000000000000000000000002",
+        "question": ["How does average utilization vary by risk grade?"]
+      },
+      {
+        "id": "10000000000000000000000000000003",
+        "question": ["Which regions have the highest drawn loan exposure?"]
+      }
+    ]
+  },
+  "data_sources": {
+    "tables": [
+      {
+        "identifier": "proactive_zero_ops_catalog.proactive_zero_ops_silver.loan_exposure"
+      }
+    ]
+  },
+  "instructions": {
+    "example_question_sqls": [
+      {
+        "id": "20000000000000000000000000000001",
+        "question": ["Which products have the most effective exposure at default?"],
+        "sql": [
+          "SELECT product_type, COUNT(*) AS account_count, SUM(effective_ead) AS effective_ead_aud\n",
+          "FROM proactive_zero_ops_catalog.proactive_zero_ops_silver.loan_exposure\n",
+          "GROUP BY product_type ORDER BY effective_ead_aud DESC"
+        ]
+      },
+      {
+        "id": "20000000000000000000000000000002",
+        "question": ["How does average utilization vary by risk grade?"],
+        "sql": [
+          "SELECT risk_grade, COUNT(*) AS account_count, AVG(utilization_ratio) AS avg_utilization\n",
+          "FROM proactive_zero_ops_catalog.proactive_zero_ops_silver.loan_exposure\n",
+          "GROUP BY risk_grade ORDER BY risk_grade"
+        ]
+      }
+    ],
+    "text_instructions": [
+      {
+        "id": "30000000000000000000000000000001",
+        "content": [
+          "Use loan_exposure for account-level product, region, risk-grade, and utilization questions. Effective exposure at default is effective_ead; drawn exposure is drawn_exposure. Utilization is utilization_ratio, stored as a fraction, so show it as a percentage.\n",
+          "The data is a synthetic, single-date credit-risk demo. Present all values as illustrative Australian-dollar amounts. Do not describe them as live lending or regulatory metrics."
+        ]
+      }
+    ]
+  }
+}

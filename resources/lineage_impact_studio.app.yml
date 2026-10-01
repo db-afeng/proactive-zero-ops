@@ -8,6 +8,8 @@ resources:
         started: true
       user_api_scopes:
         - sql
+        - genie
+        - workspace.workspace:read
       resources:
         - name: sql-warehouse
           sql_warehouse:
@@ -18,6 +20,11 @@ resources:
             securable_full_name: ${var.lineage_impact_volume}
             securable_type: VOLUME
             permission: READ_VOLUME
+        - name: table-lineage
+          uc_securable:
+            securable_full_name: system.access.table_lineage
+            securable_type: TABLE
+            permission: SELECT
         - name: postgres
           postgres:
             branch: projects/lineage-impact-studio/branches/production

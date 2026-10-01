@@ -4,12 +4,17 @@ import {
   AlertTitle,
   Badge,
   Button,
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
   Separator,
   Sheet,
   SheetContent,
   SheetDescription,
   SheetHeader,
   SheetTitle,
+  Skeleton,
 } from '@databricks/appkit-ui/react';
 import { AlertCircle, ExternalLink, Github, Loader2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -21,6 +26,7 @@ import type { AssessmentGraphEdge, AssessmentImpact, AssessmentViewV3, SourceEvi
 import { DatasetSample } from './DatasetSample';
 import { isVerifiedBreak, operationLabel, reasonText, targetLabel } from './impact-copy';
 import { formatSparkSql, tokenizeSql } from './sql-code';
+import { assetUsage, formatCount, formatObservedCount, USAGE_KINDS, type UsageLoadState } from './usage-model';
 
 type SourceState =
   | { kind: 'idle' }
@@ -30,11 +36,13 @@ type SourceState =
 
 export function ImpactInspector({
   assessment,
+  usage,
   selectedId,
   onSelect,
   onClose,
 }: {
   assessment: AssessmentViewV3;
+  usage: UsageLoadState;
   selectedId: string | null;
   onSelect: (id: string) => void;
   onClose: () => void;
@@ -51,6 +59,7 @@ export function ImpactInspector({
     <InspectorContent
       key={selectedId ?? 'none'}
       assessment={assessment}
+      usage={usage}
       selectedId={selectedId}
       onSelect={onSelect}
       onClose={onClose}
@@ -80,11 +89,13 @@ export function ImpactInspector({
 
 function InspectorContent({
   assessment,
+  usage,
   selectedId,
   onSelect,
   onClose,
 }: {
   assessment: AssessmentViewV3;
+  usage: UsageLoadState;
   selectedId: string | null;
   onSelect: (id: string) => void;
   onClose: () => void;
@@ -152,6 +163,7 @@ function InspectorContent({
               value={impact.evidenceLevel === 'definition' ? 'Parsed definition' : 'Verified lineage'}
             />
           </dl>
+          <UsageSummary asset={impact.targetAsset} usage={usage} />
           <Remediation impact={impact} />
           <DatasetSample asset={impact.targetAsset} column={impact.targetColumn} kind="impacted" />
           <SourceEvidence assessment={assessment} selectedId={impact.id} source={source} setSource={setSource} />
@@ -180,6 +192,9 @@ function InspectorContent({
             <Detail label="After" value={change.afterType} />
             <Detail label="Change kind" value={change.changeKind} />
           </dl>
+          {assessment.impacts.some((impact) => impact.targetAsset === change.asset) ? (
+            <UsageSummary asset={change.asset} usage={usage} />
+          ) : null}
           <div className="border-l-2 border-foreground pl-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recommended fix</p>
             <p className="mt-1 text-sm leading-6">{assessment.recommendedAction}</p>
@@ -199,6 +214,60 @@ function InspectorContent({
         <AlertDescription>Select another graph element.</AlertDescription>
       </Alert>
     </div>
+  );
+}
+
+function UsageSummary({ asset, usage }: { asset: string; usage: UsageLoadState }) {
+  const details = assetUsage(usage, asset);
+  const types =
+    details === undefined
+      ? []
+      : USAGE_KINDS.filter(({ kind }) => details.byType[kind] > 0).map(
+          ({ kind, plural }) => `${plural} ${formatObservedCount(details.byType[kind], details.complete)}`
+        );
+  return (
+    <section className="space-y-1.5 border-y border-border py-4" aria-label={`Observed usage of ${asset}`}>
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Observed consumers</h4>
+      {usage.kind === 'loading' ? (
+        <div className="space-y-2" role="status" aria-label="Loading observed usage">
+          <Skeleton className="h-4 w-48 max-w-full" />
+          <Skeleton className="h-3 w-36 max-w-full" />
+        </div>
+      ) : details === undefined ? (
+        <Alert>
+          <AlertCircle aria-hidden="true" />
+          <AlertTitle>Usage unavailable</AlertTitle>
+          <AlertDescription>Visible objects observed in the last 30 days could not be loaded.</AlertDescription>
+        </Alert>
+      ) : details.complete && details.count === 0 ? (
+        <Empty className="min-h-24 p-2">
+          <EmptyHeader>
+            <EmptyTitle>No observed consumers</EmptyTitle>
+            <EmptyDescription>No visible objects observed in the last 30 days used this table.</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+        <>
+          <p className="text-sm font-semibold">
+            {details.complete
+              ? `${formatCount(details.count)} distinct observed consumers`
+              : `Lower bound: ${formatCount(details.count)} observed consumers`}
+          </p>
+          <p className="text-sm text-muted-foreground">
+            {formatObservedCount(details.directCount, details.complete)} direct ·{' '}
+            {formatObservedCount(details.indirectCount, details.complete)} indirect
+          </p>
+          {!details.complete ? (
+            <p className="text-xs text-muted-foreground">Coverage incomplete; accessible objects only.</p>
+          ) : null}
+          {types.length > 0 ? <p className="text-xs text-muted-foreground">{types.join(' · ')}</p> : null}
+          <p className="text-xs text-muted-foreground">Counts include visible objects observed in the last 30 days.</p>
+          <p className="text-xs text-muted-foreground">
+            Linked objects are listed under this table in the Impact list.
+          </p>
+        </>
+      )}
+    </section>
   );
 }
 
