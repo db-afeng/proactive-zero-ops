@@ -20,6 +20,8 @@ import { AlertCircle, ExternalLink, Github, Loader2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { ScrollFadeArea } from '@/components/ScrollFadeArea';
+import { CodeIdentifier, IdentifierText } from '@/components/CodeIdentifier';
+import { assessmentIdentifiers } from '@/components/assessment-identifiers';
 import { ApiRequestError, getSourceEvidence, githubLoginUrl } from '@/lib/api';
 import type { AssessmentGraphEdge, AssessmentImpact, AssessmentViewV3, SourceEvidenceView } from '@/lib/contracts';
 
@@ -101,6 +103,7 @@ function InspectorContent({
   onClose: () => void;
 }) {
   const [source, setSource] = useState<SourceState>({ kind: 'idle' });
+  const identifiers = assessmentIdentifiers(assessment);
 
   if (selectedId === null) {
     return (
@@ -149,6 +152,7 @@ function InspectorContent({
           destructive={impact.relation === 'direct' && isVerifiedBreak(impact)}
           title={targetLabel(impact)}
           subtitle={impact.targetAsset}
+          identifier
           onClose={onClose}
         />
         <div className="space-y-5 p-6">
@@ -156,7 +160,11 @@ function InspectorContent({
           <Separator />
           <dl className="space-y-2 text-sm">
             <Detail label="Operation" value={operationLabel(impact.operation)} />
-            <Detail label="Referenced column" value={impact.targetColumn ?? 'Table-level consumer'} mono />
+            <Detail
+              label="Referenced column"
+              value={impact.targetColumn ?? 'Table-level consumer'}
+              identifier={impact.targetColumn !== null}
+            />
             <Detail label="Impact" value={impact.relation === 'direct' ? 'Direct' : 'Transitive'} />
             <Detail
               label="Evidence"
@@ -179,6 +187,7 @@ function InspectorContent({
           badge="Proposed change"
           title={change.column}
           subtitle={change.asset}
+          identifier
           warning
           onClose={onClose}
         />
@@ -197,7 +206,9 @@ function InspectorContent({
           ) : null}
           <div className="border-l-2 border-foreground pl-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recommended fix</p>
-            <p className="mt-1 text-sm leading-6">{assessment.recommendedAction}</p>
+            <p className="mt-1 text-sm leading-6">
+              <IdentifierText text={assessment.recommendedAction} identifiers={identifiers} />
+            </p>
           </div>
           <DatasetSample asset={change.asset} column={change.column} kind="changed" />
           <SourceEvidence assessment={assessment} selectedId={change.id} source={source} setSource={setSource} />
@@ -277,6 +288,7 @@ function InspectorHeading({
   warning = false,
   title,
   subtitle,
+  identifier = false,
   onClose,
 }: {
   badge: string;
@@ -284,6 +296,7 @@ function InspectorHeading({
   warning?: boolean;
   title: string;
   subtitle?: string;
+  identifier?: boolean;
   onClose: () => void;
 }) {
   return (
@@ -304,10 +317,10 @@ function InspectorHeading({
       >
         <X aria-hidden="true" />
       </Button>
-      <h3 className="mt-3 break-all font-mono text-sm font-semibold">{title}</h3>
+      <h3 className="mt-3 break-all text-sm font-semibold">{identifier ? <CodeIdentifier value={title} /> : title}</h3>
       {subtitle === undefined ? null : (
         <p className="mt-1 truncate text-xs leading-5 text-muted-foreground" title={subtitle}>
-          {subtitle}
+          {identifier ? <CodeIdentifier value={subtitle} /> : subtitle}
         </p>
       )}
     </div>
@@ -338,12 +351,12 @@ function EdgeDetails({
               <Detail
                 label="Source mapping"
                 value={`${edge.sourceAsset}${edge.sourceColumn === null ? '' : `.${edge.sourceColumn}`}`}
-                mono
+                identifier
               />
               <Detail
                 label="Target mapping"
                 value={`${edge.targetAsset}${edge.targetColumn === null ? '' : `.${edge.targetColumn}`}`}
-                mono
+                identifier
               />
             </>
           ) : null}
@@ -383,6 +396,7 @@ function SourceEvidence({
   const selectedImpact =
     source.kind === 'ready' ? source.evidence.impacts.find((item) => item.id === selectedId) : undefined;
   const expression = selectedImpact?.targetExpression;
+  const identifiers = assessmentIdentifiers(assessment);
 
   if (source.kind === 'idle') {
     return (
@@ -466,11 +480,13 @@ function SourceEvidence({
               ) : null}
             </div>
           ) : null}
-          <Expression label="Before" value={selectedChange.beforeExpression} />
-          <Expression label="After" value={selectedChange.afterExpression} />
+          <Expression label="Before" value={selectedChange.beforeExpression} identifiers={identifiers} />
+          <Expression label="After" value={selectedChange.afterExpression} identifiers={identifiers} />
         </div>
       ) : null}
-      {selectedImpact !== undefined ? <Expression label="Downstream expression" value={expression ?? null} /> : null}
+      {selectedImpact !== undefined ? (
+        <Expression label="Downstream expression" value={expression ?? null} identifiers={identifiers} />
+      ) : null}
       {selectedChange === undefined && selectedImpact === undefined ? (
         <p className="text-sm text-muted-foreground">No exact expression is available for this item.</p>
       ) : null}
@@ -478,9 +494,10 @@ function SourceEvidence({
   );
 }
 
-function Expression({ label, value }: { label: string; value: string | null }) {
+function Expression({ label, value, identifiers }: { label: string; value: string | null; identifiers: string[] }) {
   const formatted = value === null ? 'Not available' : formatSparkSql(value);
   const tokens = value === null ? [{ value: formatted, kind: 'plain' as const }] : tokenizeSql(formatted);
+  const knownIdentifiers = new Set(identifiers.map((identifier) => identifier.toLowerCase()));
   return (
     <div>
       <div className="flex items-center justify-between gap-3">
@@ -498,11 +515,18 @@ function Expression({ label, value }: { label: string; value: string | null }) {
         tabIndex={value === null ? undefined : 0}
       >
         <code>
-          {tokens.map((token, index) => (
-            <span key={`${String(index)}-${token.value}`} className={`sql-token-${token.kind}`}>
-              {token.value}
-            </span>
-          ))}
+          {tokens.map((token, index) => {
+            const name = token.value.replace(/^([`"])(.*)\1$/, '$2').toLowerCase();
+            const identifier = token.kind === 'identifier' || knownIdentifiers.has(name);
+            return (
+              <span
+                key={`${String(index)}-${token.value}`}
+                className={identifier ? 'identifier-code' : `sql-token-${token.kind}`}
+              >
+                {token.value}
+              </span>
+            );
+          })}
         </code>
       </pre>
     </div>
@@ -526,11 +550,11 @@ function Remediation({ impact }: { impact: AssessmentImpact }) {
   );
 }
 
-function Detail({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+function Detail({ label, value, identifier = false }: { label: string; value: string; identifier?: boolean }) {
   return (
     <div className="grid grid-cols-[8rem_minmax(0,1fr)] gap-3">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className={`break-words font-medium ${mono ? 'font-mono text-xs' : ''}`}>{value}</dd>
+      <dd className="break-words font-medium">{identifier ? <CodeIdentifier value={value} /> : value}</dd>
     </div>
   );
 }

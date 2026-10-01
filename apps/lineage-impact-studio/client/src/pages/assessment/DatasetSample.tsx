@@ -20,6 +20,7 @@ import {
 import { AlertCircle } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
+import { CodeIdentifier } from '@/components/CodeIdentifier';
 import { findHighlightedColumn, parseSampleRows, sampleErrorKind, type SampleRow } from './dataset-sample-model';
 
 type SampleKind = 'changed' | 'impacted';
@@ -117,7 +118,7 @@ function SampleTable({
                   <TableHead key={column} className={highlighted ? highlightClass(kind) : undefined}>
                     <span className="flex flex-col items-start gap-1 whitespace-nowrap py-1">
                       <span className="inline-flex items-center gap-2">
-                        {column}
+                        <CodeIdentifier value={column} />
                         {highlighted ? (
                           <Badge
                             variant={kind === 'impacted' ? 'destructive' : 'outline'}
