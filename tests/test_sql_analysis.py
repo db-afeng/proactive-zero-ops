@@ -130,15 +130,12 @@ def test_formatting_and_comments_do_not_produce_a_definition_change() -> None:
 
 def test_selected_outstanding_balance_break_is_a_structured_column_change() -> None:
     path = TRANSFORMATIONS / "bronze" / "loan_accounts.sql"
-    proposed = path.read_text()
-    base = proposed.replace(
-        "CONCAT(\n"
-        "    'AUD ',\n"
-        "    FORMAT_NUMBER(CAST(outstanding_balance_raw AS DECIMAL(18, 2)), 2)\n"
-        "  ) AS outstanding_balance",
+    base = path.read_text()
+    proposed = base.replace(
         "CAST(outstanding_balance_raw AS DECIMAL(18, 2)) AS outstanding_balance",
+        "CONCAT('AUD ', FORMAT_NUMBER(CAST(outstanding_balance_raw AS DECIMAL(18, 2)), 2)) "
+        "AS outstanding_balance",
     )
-    assert base != proposed
     change = analyze_sql_change(
         base_sql=base,
         proposed_sql=proposed,
@@ -162,6 +159,18 @@ def test_selected_outstanding_balance_break_is_a_structured_column_change() -> N
     # The explicit inner cast remains, but deterministic AST comparison sees
     # the new string-producing outer expression.
     assert not statement_change.casts_changed
+
+
+def test_outstanding_balance_keeps_numeric_contract_with_separate_aud_display() -> None:
+    statement = parse_repo_sql("bronze/loan_accounts.sql").statements[0]
+    columns = {column.name: column.expression_sql for column in statement.output_columns}
+
+    assert columns["outstanding_balance"] == (
+        "CAST(outstanding_balance_raw AS DECIMAL(18, 2))"
+    )
+    assert columns["outstanding_balance_display"] == (
+        "CONCAT('AUD ', FORMAT_NUMBER(CAST(outstanding_balance_raw AS DECIMAL(18, 2)), 2))"
+    )
 
 
 def test_extracts_inputs_columns_expressions_joins_filters_and_casts() -> None:

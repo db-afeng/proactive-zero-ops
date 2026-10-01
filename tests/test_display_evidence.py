@@ -25,15 +25,12 @@ GOLD = "proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_lo
 
 def fixture_changes() -> SimpleNamespace:
     source_path = TRANSFORMATIONS / "bronze" / "loan_accounts.sql"
-    proposed = source_path.read_text()
-    base = proposed.replace(
-        "CONCAT(\n"
-        "    'AUD ',\n"
-        "    FORMAT_NUMBER(CAST(outstanding_balance_raw AS DECIMAL(18, 2)), 2)\n"
-        "  ) AS outstanding_balance",
+    base = source_path.read_text()
+    proposed = base.replace(
         "CAST(outstanding_balance_raw AS DECIMAL(18, 2)) AS outstanding_balance",
+        "CONCAT('AUD ', FORMAT_NUMBER(CAST(outstanding_balance_raw AS DECIMAL(18, 2)), 2)) "
+        "AS outstanding_balance",
     )
-    assert base != proposed
     change = compare_sql_documents(
         parse_sql_document(base, path=str(source_path), variables=VARIABLES),
         parse_sql_document(proposed, path=str(source_path), variables=VARIABLES),
