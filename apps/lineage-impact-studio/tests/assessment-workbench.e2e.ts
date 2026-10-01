@@ -918,6 +918,25 @@ test('shows stale and empty evidence states without inventing impacts', async ({
   await expect(page.getByText('No verified causal graph is available', { exact: true })).toBeVisible();
 });
 
+test('labels code-derived transitive paths as potential when assessment is incomplete', async ({ page }) => {
+  await page.unroute('**/api/assessments/*');
+  await page.route(`**/api/assessments/${REFERENCE}`, async (route) => {
+    await fulfillJson(route, {
+      ...assessment,
+      status: 'error',
+      severity: 'none',
+      confidence: { interpretation: 0, discovery: 'incomplete' },
+      impacts: assessment.impacts.map((impact) =>
+        impact.relation === 'transitive' ? { ...impact, evidenceLevel: 'definition' } : impact
+      ),
+    });
+  });
+  await page.goto(`/assessments/${REFERENCE}`);
+  await expect(page.getByText('Downstream assessment incomplete')).toBeVisible();
+  await expect(page.getByLabel('Potential transitive impact: portfolio_expected_loss')).toBeVisible();
+  await expect(page.getByText('Potential transitive', { exact: true })).toBeVisible();
+});
+
 test('progresses slow loading to an actionable timeout', async ({ page }) => {
   await page.unroute('**/api/assessments/*');
   await page.clock.install();
