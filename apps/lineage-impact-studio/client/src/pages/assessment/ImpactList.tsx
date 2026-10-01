@@ -311,6 +311,8 @@ function ConsumerLinkSection({
 
 function ConsumerLink({ object }: { object: AssessmentUsageObject }) {
   const kind = USAGE_KINDS.find((entry) => entry.kind === object.kind)?.singular ?? object.kind;
+  const titleAlreadyIncludesKind = new RegExp(`^${kind}\\b`, 'i').test(object.title);
+  const linkLabel = titleAlreadyIncludesKind ? object.title : `${kind} ${object.title}`;
   const access = { read: 'Reads', write: 'Writes', read_write: 'Reads and writes' }[object.accessMode];
   return (
     <div className="space-y-1">
@@ -319,7 +321,7 @@ function ConsumerLink({ object }: { object: AssessmentUsageObject }) {
         target="_blank"
         rel="noreferrer"
         className="inline-flex max-w-full items-center gap-1.5 break-all text-sm font-medium underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        aria-label={`Open ${kind} ${object.title} in Databricks`}
+        aria-label={`Open ${linkLabel} in Databricks`}
       >
         {object.title}
         <ExternalLink className="size-3.5 shrink-0" aria-hidden="true" />

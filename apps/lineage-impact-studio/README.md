@@ -20,15 +20,17 @@ Databricks identity, and can review and approve one guarded remediation commit.
   visible count only after its own OBO access check succeeds. Anonymous SQL
   runs are not named consumers; unresolved access checks make the count a
   labelled lower bound rather than a false zero.
-- App OBO consent can lag a scope change: `apps get` may show `genie` and
-  `workspace.workspace:read` as effective while an existing viewer consent
-  still contains only `sql`. The viewer must complete a fresh Databricks app
-  authorization before Genie checks can succeed. Lakeview dashboard APIs
-  require `dashboards`, and workspace object permission APIs require
-  `access-management`; neither is currently listed among Databricks Apps'
-  supported user scopes. Those object types remain omitted and the affected
-  table count remains a lower bound when no other viewer-scoped check can
-  prove access. Never substitute the app service principal for that check.
+- App OBO consent can lag a scope change. The viewer must complete a fresh
+  Databricks app authorization when a new declared scope is deployed.
+  Lakeview dashboard permission checks accept a dashboard UUID but return its
+  numeric workspace object ID; the app verifies that response and an explicit
+  viewer ACL entry before counting the dashboard. Job and pipeline permission
+  checks require `access-management` under the viewer's OBO token, but
+  Databricks Apps does not support that user scope. Its default
+  `iam.access-control:read` scope does not authorize this permissions API.
+  Until Apps supports a viewer-scoped permission check for these objects, they
+  remain omitted and the count remains a labelled lower bound. Never
+  substitute the app service principal for a viewer check.
 - `files.files` is intentionally not an OBO scope. Generic AppKit Files routes
   must remain denied; the service reads only validated envelope paths.
 - Restricted envelope v3 publishes deterministic `display_evidence` alongside

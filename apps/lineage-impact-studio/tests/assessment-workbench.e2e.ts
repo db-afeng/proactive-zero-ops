@@ -387,6 +387,9 @@ test('shows table-level consumer counts and keeps duplicate impact nodes synchro
     'href',
     'https://dbc-example.cloud.databricks.com/sql/queries/exposure-watch'
   );
+  await expect(
+    consumers.getByRole('link', { name: 'Open Dashboard Credit exposure dashboard in Databricks' })
+  ).toBeVisible();
   await expect(consumers.getByRole('link', { name: 'Open Genie room Loan analysis room in Databricks' })).toBeVisible();
   await expect(
     indirectLinks.getByRole('link', { name: 'Open Notebook Portfolio risk notebook in Databricks' })
@@ -404,6 +407,24 @@ test('shows table-level consumer counts and keeps duplicate impact nodes synchro
   await expect(utilizationRow).toHaveAttribute('aria-pressed', 'true');
   await expect(effectiveRow).toHaveAttribute('aria-pressed', 'false');
   await expect(consumers).toBeVisible();
+});
+
+test('uses one type prefix for a verified dashboard fallback title', async ({ page }) => {
+  const fallbackUsage = structuredClone(usage);
+  const loanExposure = fallbackUsage.assets.find((entry) => entry.asset === LOAN_EXPOSURE_ASSET);
+  const dashboard = loanExposure?.objects.find((object) => object.kind === 'dashboard');
+  if (dashboard === undefined) throw new Error('Expected a dashboard fixture');
+  dashboard.title = 'Dashboard 01f1bd34786615c9b5b29d2cbfbc2112';
+
+  await page.unroute(`**/api/assessments/${REFERENCE}/usage`);
+  await page.route(`**/api/assessments/${REFERENCE}/usage`, async (route) => fulfillJson(route, fallbackUsage));
+  await page.goto(`/assessments/${REFERENCE}`);
+  await page.getByRole('button', { name: `Show observed consumers of ${LOAN_EXPOSURE_ASSET}` }).click();
+
+  const link = page.getByRole('link', { name: `Open ${dashboard.title} in Databricks` });
+  await expect(link).toHaveText(dashboard.title);
+  await expect(link).toHaveAttribute('href', dashboard.url);
+  await expect(link).toHaveAttribute('aria-label', `Open ${dashboard.title} in Databricks`);
 });
 
 test('opens the table group from keyboard-selected graph nodes and keeps their evidence distinct', async ({ page }) => {

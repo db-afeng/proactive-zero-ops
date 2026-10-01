@@ -145,7 +145,7 @@ changing or running resources, use `--verify-only` in place of `--run`.
 
 Lineage confirms that the demo objects ran, while the app counts only objects
 it can verify with the current viewer's OBO token. New app scopes require fresh
-viewer consent, and unsupported object-check scopes leave labelled lower
+viewer consent, and unavailable object-check scopes leave labelled lower
 bounds in the impact map and list.
 
 Open each deployed dashboard and ask one of the sample questions in each Genie

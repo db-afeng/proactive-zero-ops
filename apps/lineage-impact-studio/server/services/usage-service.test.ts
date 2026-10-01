@@ -415,8 +415,8 @@ describe('UsageService', () => {
       if (url.pathname === '/api/2.0/permissions/jobs/42') {
         return Promise.resolve(
           jsonResponse(200, {
-            object_id: '42',
-            object_type: 'jobs',
+            object_id: '/jobs/42',
+            object_type: 'job',
             access_control_list: [
               { user_name: 'viewer@example.com', all_permissions: [{ permission_level: 'CAN_VIEW' }] },
             ],
@@ -426,7 +426,7 @@ describe('UsageService', () => {
       if (url.pathname === '/api/2.0/permissions/pipelines/p1') {
         return Promise.resolve(
           jsonResponse(200, {
-            object_id: 'p1',
+            object_id: '/pipelines/p1',
             object_type: 'pipelines',
             access_control_list: [
               { user_name: 'viewer@example.com', all_permissions: [{ permission_level: 'CAN_VIEW' }] },
@@ -464,15 +464,157 @@ describe('UsageService', () => {
     expect(paths).toContain('/api/2.0/pipelines/p1');
   });
 
+  it('uses fallback labels when job and pipeline title lookups return different IDs', async () => {
+    const fetchImplementation: typeof fetch = (input) => {
+      const path = fetchUrl(input).pathname;
+      if (path.endsWith('/Me')) return Promise.resolve(jsonResponse(200, { userName: 'viewer@example.com' }));
+      if (path === '/api/2.0/permissions/jobs/42' || path === '/api/2.0/permissions/pipelines/p1') {
+        const isJob = path.endsWith('/jobs/42');
+        return Promise.resolve(
+          jsonResponse(200, {
+            object_id: isJob ? '/jobs/42' : '/pipelines/p1',
+            object_type: isJob ? 'job' : 'pipelines',
+            access_control_list: [
+              { user_name: 'viewer@example.com', all_permissions: [{ permission_level: 'CAN_VIEW' }] },
+            ],
+          })
+        );
+      }
+      if (path === '/api/2.1/jobs/get') {
+        return Promise.resolve(jsonResponse(200, { job_id: 420, settings: { name: 'Another job' } }));
+      }
+      if (path === '/api/2.0/pipelines/p1') {
+        return Promise.resolve(jsonResponse(200, { pipeline_id: 'p2', spec: { name: 'Another pipeline' } }));
+      }
+      return Promise.resolve(jsonResponse(404, { error_code: 'RESOURCE_DOES_NOT_EXIST' }));
+    };
+    const { studio } = service(
+      [
+        observation({ asset: ALPHA, entityClass: 'job', id: '42' }),
+        observation({ asset: ALPHA, entityClass: 'pipeline', id: 'p1' }),
+      ],
+      fetchImplementation
+    );
+    const usage = await studio.getUsage({ view: assessment([[ROOT, ALPHA]]), oboToken: TOKEN });
+
+    expect(usage.assets[0]).toMatchObject({ count: 2, complete: true });
+    expect(usage.assets[0]?.objects.map((item) => item.title).sort()).toEqual(['Job 42', 'Pipeline p1']);
+    expect(usage.assets[0]?.objects.map((item) => item.url).sort()).toEqual([
+      'https://workspace.example.com/jobs/42',
+      'https://workspace.example.com/pipelines/p1',
+    ]);
+  });
+
+  it('accepts a Lakeview ACL resolved from its UUID to a numeric workspace object', async () => {
+    const fetchImplementation: typeof fetch = (input) => {
+      const path = fetchUrl(input).pathname;
+      if (path === '/api/2.0/lakeview/dashboards/d1') {
+        return Promise.resolve(jsonResponse(403, { error_code: 'INSUFFICIENT_PRIVILEGES', message: 'Missing scope' }));
+      }
+      if (path.endsWith('/Me')) return Promise.resolve(jsonResponse(200, { userName: 'viewer@example.com' }));
+      if (path === '/api/2.0/permissions/dashboards/d1') {
+        return Promise.resolve(
+          jsonResponse(200, {
+            object_id: '/dashboards/98469842751293',
+            object_type: 'dashboard',
+            access_control_list: [
+              { user_name: 'viewer@example.com', all_permissions: [{ permission_level: 'CAN_MANAGE' }] },
+            ],
+          })
+        );
+      }
+      return Promise.resolve(jsonResponse(404, { error_code: 'RESOURCE_DOES_NOT_EXIST' }));
+    };
+    const { studio } = service(
+      [observation({ asset: ALPHA, entityClass: 'dashboard_v3', id: 'd1' })],
+      fetchImplementation
+    );
+    const usage = await studio.getUsage({ view: assessment([[ROOT, ALPHA]]), oboToken: TOKEN });
+
+    expect(usage.assets[0]).toMatchObject({ count: 1, complete: true, byType: { dashboard: 1 } });
+    expect(usage.assets[0]?.objects[0]).toMatchObject({
+      title: 'Dashboard d1',
+      url: 'https://workspace.example.com/dashboardsv3/d1/published?w=123456789',
+    });
+  });
+
+  it('rejects a permissions response for a different resource path', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const fetchImplementation: typeof fetch = (input) => {
+      const path = fetchUrl(input).pathname;
+      if (path.endsWith('/Me')) return Promise.resolve(jsonResponse(200, { userName: 'viewer@example.com' }));
+      if (path === '/api/2.0/permissions/jobs/42') {
+        return Promise.resolve(
+          jsonResponse(200, {
+            object_id: '/jobs/420',
+            object_type: 'job',
+            access_control_list: [
+              { user_name: 'viewer@example.com', all_permissions: [{ permission_level: 'IS_OWNER' }] },
+            ],
+          })
+        );
+      }
+      if (path === '/api/2.0/permissions/pipelines/p1') {
+        return Promise.resolve(
+          jsonResponse(200, {
+            object_id: '/pipelines/p1/extra',
+            object_type: 'pipelines',
+            access_control_list: [
+              { user_name: 'viewer@example.com', all_permissions: [{ permission_level: 'IS_OWNER' }] },
+            ],
+          })
+        );
+      }
+      return Promise.resolve(jsonResponse(404, { error_code: 'RESOURCE_DOES_NOT_EXIST' }));
+    };
+    const { studio } = service(
+      [
+        observation({ asset: ALPHA, entityClass: 'job', id: '42' }),
+        observation({ asset: ALPHA, entityClass: 'pipeline', id: 'p1' }),
+      ],
+      fetchImplementation
+    );
+    const usage = await studio.getUsage({ view: assessment([[ROOT, ALPHA]]), oboToken: TOKEN });
+
+    expect(usage.assets[0]).toMatchObject({ count: 0, complete: false, objects: [] });
+  });
+
+  it('logs only an allowlisted missing scope, never a permission error body', async () => {
+    const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const fetchImplementation: typeof fetch = (input, init) => {
+      expect(init?.method).toBe('GET');
+      const path = fetchUrl(input).pathname;
+      if (path.endsWith('/Me')) return Promise.resolve(jsonResponse(200, { userName: 'viewer@example.com' }));
+      return Promise.resolve(
+        jsonResponse(403, {
+          error_code: 'INSUFFICIENT_PRIVILEGES',
+          message: 'Missing scope: access-management for private-job-name and secret-token',
+        })
+      );
+    };
+    const { studio } = service([observation({ asset: ALPHA, entityClass: 'job', id: '42' })], fetchImplementation);
+    const usage = await studio.getUsage({ view: assessment([[ROOT, ALPHA]]), oboToken: TOKEN });
+
+    expect(usage.assets[0]).toMatchObject({ count: 0, complete: false, objects: [] });
+    expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+      '[lineage-impact-studio] Consumer visibility diagnostic',
+      '{"kind":"jobs","outcome":"unresolved","checks":[{"status":403,"reason":"scope_denied","scopeHint":"access-management"}]}'
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toMatch(
+      /private-job-name|secret-token|viewer@example\.com|\/jobs\/42/u
+    );
+  });
+
   it('does not count jobs or pipelines from group or another user grants', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
     const fetchImplementation = vi.fn<typeof fetch>((input) => {
       const path = fetchUrl(input).pathname;
       if (path.endsWith('/Me')) return Promise.resolve(jsonResponse(200, { userName: 'viewer@example.com' }));
       if (path === '/api/2.0/permissions/jobs/42') {
         return Promise.resolve(
           jsonResponse(200, {
-            object_id: '42',
-            object_type: 'jobs',
+            object_id: '/jobs/42',
+            object_type: 'job',
             access_control_list: [{ group_name: 'viewers', all_permissions: [{ permission_level: 'CAN_VIEW' }] }],
           })
         );
@@ -480,7 +622,7 @@ describe('UsageService', () => {
       if (path === '/api/2.0/permissions/pipelines/p1') {
         return Promise.resolve(
           jsonResponse(200, {
-            object_id: 'p1',
+            object_id: '/pipelines/p1',
             object_type: 'pipelines',
             access_control_list: [
               { user_name: 'another@example.com', all_permissions: [{ permission_level: 'CAN_MANAGE' }] },

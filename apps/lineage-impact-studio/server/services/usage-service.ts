@@ -584,7 +584,7 @@ function normalizeWorkspaceHost(value: string): string {
 
 type JsonResponse = { state: 'ok'; body: unknown } | { state: 'denied' } | { state: 'unresolved' };
 
-type GenieDiagnosticReason =
+type VisibilityDiagnosticReason =
   | 'scope_denied'
   | 'access_denied'
   | 'not_found'
@@ -600,7 +600,8 @@ type GenieDiagnosticReason =
   | 'viewer_unavailable'
   | 'viewer_grant_unresolved';
 
-type GenieDiagnosticCallback = (status: number, reason: GenieDiagnosticReason) => void;
+type ScopeHint = 'jobs' | 'pipelines' | 'access-management' | 'dashboards' | 'all-apis' | 'unknown';
+type VisibilityDiagnosticCallback = (status: number, reason: VisibilityDiagnosticReason, scopeHint?: ScopeHint) => void;
 
 class ConsumerVisibilityClient {
   readonly #host: string;
@@ -630,9 +631,11 @@ class ConsumerVisibilityClient {
         );
       case 'genie': {
         const url = `${this.#host}/genie/rooms/${encodeURIComponent(id)}`;
-        const checks: Array<{ probe: 'get' | 'acl'; status: number; reason: GenieDiagnosticReason }> = [];
-        const recordGet: GenieDiagnosticCallback = (status, reason) => checks.push({ probe: 'get', status, reason });
-        const recordAcl: GenieDiagnosticCallback = (status, reason) => checks.push({ probe: 'acl', status, reason });
+        const checks: Array<{ probe: 'get' | 'acl'; status: number; reason: VisibilityDiagnosticReason }> = [];
+        const recordGet: VisibilityDiagnosticCallback = (status, reason) =>
+          checks.push({ probe: 'get', status, reason });
+        const recordAcl: VisibilityDiagnosticCallback = (status, reason) =>
+          checks.push({ probe: 'acl', status, reason });
         const direct = await this.#authorizeObject(
           `/api/2.0/genie/spaces/${encodeURIComponent(id)}`,
           id,
@@ -664,7 +667,9 @@ class ConsumerVisibilityClient {
           'Dashboard',
           url
         );
-        return direct.state === 'authorized' ? direct : this.#authorizeAcl('dashboards', id, 'Dashboard', url);
+        return direct.state === 'authorized'
+          ? direct
+          : this.#authorizeAclWithDiagnostics('dashboards', id, 'Dashboard', url);
       }
       case 'dashboard_legacy': {
         const url = `${this.#host}/sql/dashboards/${encodeURIComponent(id)}`;
@@ -685,9 +690,14 @@ class ConsumerVisibilityClient {
           `${this.#host}/?o=${encodeURIComponent(this.#workspaceId)}#notebook/${encodeURIComponent(id)}`
         );
       case 'pipeline':
-        return this.#authorizeAcl('pipelines', id, 'Pipeline', `${this.#host}/pipelines/${encodeURIComponent(id)}`);
+        return this.#authorizeAclWithDiagnostics(
+          'pipelines',
+          id,
+          'Pipeline',
+          `${this.#host}/pipelines/${encodeURIComponent(id)}`
+        );
       case 'job':
-        return this.#authorizeAcl('jobs', id, 'Job', `${this.#host}/jobs/${encodeURIComponent(id)}`);
+        return this.#authorizeAclWithDiagnostics('jobs', id, 'Job', `${this.#host}/jobs/${encodeURIComponent(id)}`);
       case 'alert': {
         const url = `${this.#host}/sql/alerts/${encodeURIComponent(id)}`;
         const direct = await this.#authorizeObject(
@@ -708,7 +718,7 @@ class ConsumerVisibilityClient {
     idFields: readonly string[],
     typeLabel: string,
     url: string,
-    diagnostic?: GenieDiagnosticCallback
+    diagnostic?: VisibilityDiagnosticCallback
   ): Promise<Visibility> {
     const result = await this.#request(path, diagnostic);
     if (result.state !== 'ok') return result;
@@ -727,12 +737,32 @@ class ConsumerVisibilityClient {
     return { state: 'authorized', title: title ?? `${typeLabel} ${expectedId}`, url };
   }
 
+  async #authorizeAclWithDiagnostics(
+    objectType: string,
+    id: string,
+    typeLabel: string,
+    url: string
+  ): Promise<Visibility> {
+    const checks: Array<{ status: number; reason: VisibilityDiagnosticReason; scopeHint?: ScopeHint }> = [];
+    const result = await this.#authorizeAcl(objectType, id, typeLabel, url, (status, reason, scopeHint) => {
+      checks.push({ status, reason, ...(scopeHint === undefined ? {} : { scopeHint }) });
+    });
+    if (result.state !== 'authorized') {
+      // IDs, titles, token contents, and service responses never enter this log.
+      console.info(
+        '[lineage-impact-studio] Consumer visibility diagnostic',
+        JSON.stringify({ kind: objectType, outcome: result.state, checks })
+      );
+    }
+    return result;
+  }
+
   async #authorizeAcl(
     objectType: string,
     id: string,
     typeLabel: string,
     url: string,
-    diagnostic?: GenieDiagnosticCallback
+    diagnostic?: VisibilityDiagnosticCallback
   ): Promise<Visibility> {
     const userName = await this.#userName();
     if (userName === null) {
@@ -745,10 +775,7 @@ class ConsumerVisibilityClient {
       diagnostic?.(200, 'invalid_response');
       return { state: 'unresolved' };
     }
-    if (
-      objectIdentifierField(result.body, 'object_id')?.toLowerCase() !== id.toLowerCase() ||
-      objectStringField(result.body, 'object_type') !== objectType
-    ) {
+    if (!aclResponseMatches(result.body, objectType, id)) {
       diagnostic?.(200, 'id_mismatch');
       return { state: 'unresolved' };
     }
@@ -792,6 +819,8 @@ class ConsumerVisibilityClient {
     }
     const result = await this.#request(path);
     if (result.state !== 'ok') return null;
+    const returnedId = objectIdentifierField(result.body, objectType === 'jobs' ? 'job_id' : 'pipeline_id');
+    if (returnedId?.toLowerCase() !== id.toLowerCase()) return null;
     const nested = objectField(result.body, objectType === 'jobs' ? 'settings' : 'spec');
     return safeTitle(objectStringField(nested, 'name') ?? objectStringField(result.body, 'name'));
   }
@@ -807,7 +836,7 @@ class ConsumerVisibilityClient {
     return objectStringField(result.body, 'userName')?.toLowerCase() ?? null;
   }
 
-  async #request(path: string, diagnostic?: GenieDiagnosticCallback): Promise<JsonResponse> {
+  async #request(path: string, diagnostic?: VisibilityDiagnosticCallback): Promise<JsonResponse> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
@@ -837,7 +866,8 @@ class ConsumerVisibilityClient {
       if (response.ok) {
         return { state: 'ok', body };
       }
-      diagnostic?.(response.status, genieFailureReason(response.status, body));
+      const reason = requestFailureReason(response.status, body);
+      diagnostic?.(response.status, reason, reason === 'scope_denied' ? requiredScopeHint(body) : undefined);
       return { state: classifyFailedRequest(response.status, body) };
     } catch {
       diagnostic?.(0, controller.signal.aborted ? 'timeout' : 'network_error');
@@ -846,6 +876,20 @@ class ConsumerVisibilityClient {
       clearTimeout(timeout);
     }
   }
+}
+
+/** Permissions API responses use singular types and resource paths for some objects. */
+function aclResponseMatches(body: unknown, objectType: string, id: string): boolean {
+  const responseType = objectStringField(body, 'object_type');
+  const responseId = objectIdentifierField(body, 'object_id')?.toLowerCase();
+  const expectedType = objectType === 'jobs' ? 'job' : objectType === 'dashboards' ? 'dashboard' : objectType;
+  if (responseType !== expectedType && responseType !== objectType) return false;
+  if (responseId === undefined || responseId === null) return false;
+  // Lakeview permission lookups accept a dashboard UUID but return the mapped
+  // workspace object's numeric ID. The OBO request is bound to the UUID.
+  if (objectType === 'dashboards') return /^\/dashboards\/[1-9][0-9]*$/u.test(responseId);
+  const normalizedId = id.toLowerCase();
+  return responseId === normalizedId || responseId === `/${objectType}/${normalizedId}`;
 }
 
 const VIEW_PERMISSION_LEVELS = new Set([
@@ -860,7 +904,7 @@ const VIEW_PERMISSION_LEVELS = new Set([
   'IS_OWNER',
 ]);
 
-function genieFailureReason(status: number, body: unknown): GenieDiagnosticReason {
+function requestFailureReason(status: number, body: unknown): VisibilityDiagnosticReason {
   if (status === 401) return 'authentication_failed';
   if (status === 403) {
     const message = objectStringField(body, 'message')?.toLowerCase() ?? '';
@@ -869,6 +913,23 @@ function genieFailureReason(status: number, body: unknown): GenieDiagnosticReaso
   if (status === 404) return 'not_found';
   if (status === 429) return 'rate_limited';
   return 'http_error';
+}
+
+function requiredScopeHint(body: unknown): ScopeHint {
+  const message = objectStringField(body, 'message')?.toLowerCase() ?? '';
+  const scope = /(?:required|missing|allowed)\s+(?:api\s+)?scopes?\s*:?\s*['"`]?([a-z][a-z0-9:.-]*)/u.exec(
+    message
+  )?.[1];
+  if (
+    scope === 'jobs' ||
+    scope === 'pipelines' ||
+    scope === 'access-management' ||
+    scope === 'dashboards' ||
+    scope === 'all-apis'
+  ) {
+    return scope;
+  }
+  return 'unknown';
 }
 
 function classifyFailedRequest(status: number, body: unknown): 'denied' | 'unresolved' {
