@@ -12,6 +12,7 @@ from lineage_guard.bundle import (
     BundleResource,
     BundleSnapshot,
     GitRevisionTree,
+    ResourceChange,
     compare_bundle_snapshots,
     discover_bundle,
 )
@@ -23,6 +24,17 @@ from lineage_guard.sql_analysis import (
     compare_sql_documents,
     parse_sql_document,
 )
+
+_CONSUMER_RESOURCE_TYPES = frozenset({"dashboards", "genie_spaces"})
+_APP_SCOPE_ADDITIONS = frozenset({"genie", "workspace.workspace:read"})
+_APP_LINEAGE_BINDING = {
+    "name": "table-lineage",
+    "uc_securable": {
+        "securable_full_name": "system.access.table_lineage",
+        "securable_type": "TABLE",
+        "permission": "SELECT",
+    },
+}
 
 
 class GitError(RuntimeError):
@@ -131,11 +143,16 @@ class ChangeSet:
             if change.kind != "modified"
             or (change.after_path or change.before_path or "") not in formatting_only
         ]
+        relevant_resource_changes = [
+            change
+            for change in bundle.resource_changes
+            if not _is_non_dataset_resource_change(change)
+        ]
         return bool(
             self.meaningful_sql_changes
             or bundle.configuration_changes
             or bundle.variable_changes
-            or bundle.resource_changes
+            or relevant_resource_changes
             or relevant_source_changes
         )
 
@@ -153,6 +170,64 @@ class ChangeSet:
                 edge.model_dump(mode="json") for edge in self.proposed_code_edges
             ],
         }
+
+
+def _is_non_dataset_resource_change(change: ResourceChange) -> bool:
+    """Exempt only consumer resources and the app's read-only lineage access delta."""
+    resources = tuple(resource for resource in (change.before, change.after) if resource)
+    if resources and all(
+        resource.resource_type in _CONSUMER_RESOURCE_TYPES for resource in resources
+    ):
+        return True
+    return _is_read_only_app_change(change)
+
+
+def _is_read_only_app_change(change: ResourceChange) -> bool:
+    if (
+        change.kind != "modified"
+        or change.before is None
+        or change.after is None
+        or change.before.identity != change.after.identity
+        or change.before.resource_type != "apps"
+        or {field.field for field in change.fields} - {"user_api_scopes", "resources"}
+    ):
+        return False
+    before = dict(change.before.config)
+    after = dict(change.after.config)
+    old_scopes = before.pop("user_api_scopes", [])
+    new_scopes = after.pop("user_api_scopes", [])
+    old_bindings = before.pop("resources", [])
+    new_bindings = after.pop("resources", [])
+    if before != after:
+        return False
+    if not _is_allowed_scope_addition(old_scopes, new_scopes):
+        return False
+    if not isinstance(old_bindings, list) or not isinstance(new_bindings, list):
+        return False
+    if new_bindings == old_bindings:
+        return True
+    if _APP_LINEAGE_BINDING in old_bindings or len(new_bindings) != len(old_bindings) + 1:
+        return False
+    return any(
+        binding == _APP_LINEAGE_BINDING
+        and new_bindings[:index] + new_bindings[index + 1 :] == old_bindings
+        for index, binding in enumerate(new_bindings)
+    )
+
+
+def _is_allowed_scope_addition(before: Any, after: Any) -> bool:
+    if not isinstance(before, list) or not isinstance(after, list):
+        return False
+    if not all(isinstance(scope, str) for scope in (*before, *after)):
+        return False
+    old = set(before)
+    new = set(after)
+    return (
+        len(old) == len(before)
+        and len(new) == len(after)
+        and old <= new
+        and new - old <= _APP_SCOPE_ADDITIONS
+    )
 
 
 def _git(repo: Path, args: list[str], *, allow_failure: bool = False) -> str:

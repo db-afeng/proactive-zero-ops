@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from lineage_guard.bundle import BundleResource, ResourceChange
 from lineage_guard.cli import assess
 from lineage_guard.config import GuardConfig
 from lineage_guard.lineage import LineageGraph
@@ -94,6 +95,34 @@ def test_no_semantic_or_bundle_change_passes_without_databricks(
         "base_sha": BASE_SHA,
         "head_sha": HEAD_SHA,
     }
+
+
+def test_unknown_resource_without_output_dataset_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = changes()
+    candidate.has_relevant_changes = True
+    candidate.bundle_changes.resource_changes = (
+        ResourceChange(
+            kind="added",
+            before=None,
+            after=BundleResource(
+                resource_type="future_resources",
+                key="new_resource",
+                config={"name": "new-resource"},
+                declaring_files=("resources/new_resource.yml",),
+            ),
+        ),
+    )
+    patch_inputs(monkeypatch, candidate)
+
+    exit_code = assess(arguments(tmp_path))
+
+    assert exit_code == 2
+    assert public_result(tmp_path)["outcome"] == "error"
+    assert "Relevant bundle changes did not resolve to any output dataset" in json.dumps(
+        restricted_result(tmp_path)
+    )
 
 
 @pytest.mark.parametrize("message", ["authentication failed", "warehouse unavailable"])

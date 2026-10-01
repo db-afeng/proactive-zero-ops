@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from lineage_guard.bundle import compare_bundle_snapshots, discover_bundle
 
 
@@ -309,6 +311,67 @@ def test_compare_captures_catalog_schema_and_pipeline_source_changes(tmp_path: P
         change.kind == "added" and change.after_path == "src/replacement/new.sql"
         for change in changes.source_changes
     )
+
+
+def test_declared_warehouse_runtime_id_is_allowed_only_for_consumer_warehouse_fields(
+    tmp_path: Path,
+) -> None:
+    repo = initialize_repo(tmp_path)
+    files = base_bundle()
+    files["resources/consumer.yml"] = """
+resources:
+  sql_warehouses:
+    risk:
+      name: risk-warehouse
+  dashboards:
+    exposure:
+      warehouse_id: ${resources.sql_warehouses.risk.id}
+  genie_spaces:
+    explorer:
+      warehouse_id: ${resources.sql_warehouses.risk.id}
+"""
+    revision = write_files(repo, files)
+
+    snapshot = discover_bundle(repo, revision, target="dev")
+
+    assert snapshot.complete, snapshot.issues
+    assert snapshot.resource_map["dashboards.exposure"].config["warehouse_id"] == (
+        "${resources.sql_warehouses.risk.id}"
+    )
+    assert snapshot.resource_map["genie_spaces.explorer"].config["warehouse_id"] == (
+        "${resources.sql_warehouses.risk.id}"
+    )
+
+
+@pytest.mark.parametrize(
+    "consumer_config",
+    [
+        "dashboards:\n    exposure:\n      warehouse_id: ${resources.sql_warehouses.missing.id}",
+        "dashboards:\n    exposure:\n      warehouse_id: ${resources.pipelines.risk.id}",
+        "dashboards:\n    exposure:\n      dataset_catalog: ${resources.sql_warehouses.risk.id}",
+        (
+            "dashboards:\n    exposure:\n"
+            "      warehouse_id: prefix-${resources.sql_warehouses.risk.id}"
+        ),
+        "pipelines:\n    risk:\n      warehouse_id: ${resources.sql_warehouses.risk.id}",
+    ],
+)
+def test_other_runtime_id_references_remain_discovery_limitations(
+    tmp_path: Path, consumer_config: str
+) -> None:
+    repo = initialize_repo(tmp_path)
+    files = base_bundle()
+    files["resources/consumer.yml"] = (
+        "resources:\n  sql_warehouses:\n    risk:\n      name: risk-warehouse\n  "
+        + consumer_config
+        + "\n"
+    )
+    revision = write_files(repo, files)
+
+    snapshot = discover_bundle(repo, revision, target="dev")
+
+    assert not snapshot.complete
+    assert any(issue.code == "unsupported_dynamic_substitution" for issue in snapshot.issues)
 
 
 def test_dynamic_and_executable_configuration_is_explicitly_unsupported(
