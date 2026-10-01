@@ -15,7 +15,6 @@ import {
 } from '@databricks/appkit-ui/react';
 import { AlertCircle, ChevronDown, ExternalLink, RotateCw } from 'lucide-react';
 
-import { CodeIdentifier } from '@/components/CodeIdentifier';
 import type { AssessmentImpact, AssessmentUsageObject, UsageObjectKind } from '@/lib/contracts';
 
 import { isVerifiedBreak, operationLabel, targetLabel } from './impact-copy';
@@ -94,11 +93,11 @@ export function ImpactList({
                       aria-hidden="true"
                     />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold" title={asset}>
-                        <CodeIdentifier value={shortAsset(asset)} />
-                      </span>
-                      <span className="block truncate text-xs text-muted-foreground" title={asset}>
-                        <CodeIdentifier value={asset} />
+                      <code className="block truncate font-mono text-sm font-semibold" title={asset}>
+                        {shortAsset(asset)}
+                      </code>
+                      <span className="block truncate font-mono text-xs text-muted-foreground" title={asset}>
+                        {asset}
                       </span>
                     </span>
                     <span
@@ -140,9 +139,7 @@ export function ImpactList({
                               {impact.relation === 'transitive' ? 'Transitive' : 'Direct'}
                             </Badge>
                           </span>
-                          <span className="min-w-0 break-all text-sm font-medium">
-                            <CodeIdentifier value={targetLabel(impact)} />
-                          </span>
+                          <code className="min-w-0 break-all font-mono text-sm font-medium">{targetLabel(impact)}</code>
                           <span className="text-muted-foreground md:text-foreground">
                             <span className="mr-1 text-xs text-muted-foreground md:hidden">Operation:</span>
                             {operationLabel(impact.operation)}
@@ -338,15 +335,7 @@ function ConsumerLink({ object }: { object: AssessmentUsageObject }) {
           <span>Last seen {formatObservedDate(object.lastObservedAt)}</span>
         </p>
         {viaAssets.length > 0 ? (
-          <p className="break-all text-xs text-muted-foreground">
-            Via{' '}
-            {viaAssets.map((asset, index) => (
-              <span key={asset}>
-                {index > 0 ? ', ' : null}
-                <CodeIdentifier value={asset} />
-              </span>
-            ))}
-          </p>
+          <p className="break-all text-xs text-muted-foreground">Via {viaAssets.join(', ')}</p>
         ) : null}
       </div>
     </div>

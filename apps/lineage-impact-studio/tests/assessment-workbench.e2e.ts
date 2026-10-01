@@ -335,6 +335,7 @@ test('explains the PR #4 break and keeps the default graph causal', async ({ pag
       name: 'outstanding_balance is now text, but loan_exposure still performs numeric arithmetic.',
     })
   ).toBeVisible();
+  await expect(page.locator('#assessment-summary-title code.identifier-code')).toHaveCount(2);
   await expect(page.getByText('Some lineage is restricted', { exact: true })).toBeVisible();
   await expect(page.getByText('loan_exposure.effective_ead', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('loan_exposure.utilization_ratio', { exact: true }).first()).toBeVisible();
@@ -400,18 +401,23 @@ test('shows table-level consumer counts and keeps duplicate impact nodes synchro
   for (const kind of ['query', 'dashboard', 'genie', 'notebook', 'pipeline']) {
     await expect(consumers.locator(`img[src="/consumer-icons/${kind}.svg"]`)).toHaveCount(1);
   }
+  await expect(page.getByLabel('Impact lineage graph').locator('code.identifier-code')).toHaveCount(0);
   await expect(
-    page.getByRole('button', { name: `Hide observed consumers of ${LOAN_EXPOSURE_ASSET}` }).locator('code.identifier-code')
-  ).toHaveCount(2);
+    page.getByRole('button', { name: `Hide observed consumers of ${LOAN_EXPOSURE_ASSET}` }).locator('code')
+  ).toHaveText('loan_exposure');
   await expect(
     indirectLinks.getByRole('listitem').filter({ hasText: 'Portfolio risk notebook' }).locator('code.identifier-code')
-  ).toHaveText('proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_loss');
+  ).toHaveCount(0);
+  await expect(page.getByRole('list', { name: 'Affected tables' }).locator('code.identifier-code')).toHaveCount(0);
   await expect(consumers).toHaveScreenshot('pr4-observed-consumers.png', { animations: 'disabled' });
 
   const effectiveRow = page.getByRole('button', { name: /Inspect direct impact on .*effective_ead/ });
   const utilizationRow = page.getByRole('button', { name: /Inspect direct impact on .*utilization_ratio/ });
   await effectiveRow.click();
   await expect(effectiveRow).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    page.getByTestId('impact-inspector-scroll-region').locator('code.identifier-code').first()
+  ).toBeVisible();
   await expect(page.getByRole('button', { name: `Hide observed consumers of ${LOAN_EXPOSURE_ASSET}` })).toBeVisible();
   await utilizationRow.click();
   await expect(utilizationRow).toHaveAttribute('aria-pressed', 'true');
