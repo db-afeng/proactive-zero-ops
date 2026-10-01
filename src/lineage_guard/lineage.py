@@ -31,6 +31,16 @@ class StatementExecutor:
         self.workspace_client = workspace_client
 
     def query(self, statement: str, timeout_seconds: int = 120) -> list[list[Any]]:
+        for attempt in range(3):
+            try:
+                return self._query_once(statement, timeout_seconds)
+            except Exception as exc:
+                if attempt == 2 or not _retryable_lineage_error(exc):
+                    raise
+                time.sleep(2**attempt)
+        raise AssertionError("unreachable")
+
+    def _query_once(self, statement: str, timeout_seconds: int) -> list[list[Any]]:
         response = self.workspace_client.statement_execution.execute_statement(
             warehouse_id=self.warehouse_id,
             statement=statement,
@@ -53,6 +63,11 @@ class StatementExecutor:
 
         result = getattr(response, "result", None)
         return list(getattr(result, "data_array", None) or [])
+
+
+def _retryable_lineage_error(error: Exception) -> bool:
+    status = getattr(error, "status_code", None)
+    return status in {408, 429, 500, 502, 503, 504} or "unexpected condition" in str(error).lower()
 
 
 class LineageGraph:

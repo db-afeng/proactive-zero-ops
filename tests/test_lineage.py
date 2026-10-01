@@ -1,4 +1,8 @@
-from lineage_guard.lineage import LineageGraph, LineageRepository
+from types import SimpleNamespace
+
+import pytest
+
+from lineage_guard.lineage import LineageGraph, LineageRepository, StatementExecutor
 from lineage_guard.models import EvidenceOrigin, LineageEdge
 
 
@@ -113,3 +117,28 @@ def test_repository_includes_external_entity_consumers_without_traversing_them()
     assert edge.target_table == "databricks://dashboard/abc-123"
     assert edge.entity_id == "abc-123"
     assert edge.created_by == "owner@example.com"
+
+
+def test_statement_executor_retries_transient_lineage_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def execute_statement(**_: object) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("The request failed due to an unexpected condition.")
+        return SimpleNamespace(
+            status=SimpleNamespace(state="SUCCEEDED"),
+            result=SimpleNamespace(data_array=[["main.bronze.accounts"]]),
+        )
+
+    monkeypatch.setattr("lineage_guard.lineage.time.sleep", lambda _: None)
+    workspace = SimpleNamespace(
+        statement_execution=SimpleNamespace(execute_statement=execute_statement)
+    )
+    executor = StatementExecutor(warehouse_id="warehouse", workspace_client=workspace)
+
+    assert executor.query("SELECT 1") == [["main.bronze.accounts"]]
+    assert calls == 2
