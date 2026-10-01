@@ -1,0 +1,22 @@
+resources:
+  dashboards:
+    exposure_by_product:
+      display_name: PZO Demo | Exposure by Product
+      file_path: ../src/credit_risk/consumers/dashboards/exposure_by_product.lvdash.json
+      warehouse_id: ${resources.sql_warehouses.lineage_guard.id}
+      dataset_catalog: ${var.catalog}
+      dataset_schema: ${var.silver_schema}
+
+    exposure_by_risk_grade:
+      display_name: PZO Demo | Exposure by Risk Grade
+      file_path: ../src/credit_risk/consumers/dashboards/exposure_by_risk_grade.lvdash.json
+      warehouse_id: ${resources.sql_warehouses.lineage_guard.id}
+      dataset_catalog: ${var.catalog}
+      dataset_schema: ${var.silver_schema}
+
+    expected_loss_by_region:
+      display_name: PZO Demo | Expected Loss by Region
+      file_path: ../src/credit_risk/consumers/dashboards/expected_loss_by_region.lvdash.json
+      warehouse_id: ${resources.sql_warehouses.lineage_guard.id}
+      dataset_catalog: ${var.catalog}
+      dataset_schema: ${var.gold_schema}

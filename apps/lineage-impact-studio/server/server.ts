@@ -30,6 +30,7 @@ createApp({
     if (!isVolumeReader(volume)) throw new Error('Restricted assessment Volume is not available');
     await setupStudioRoutes({
       analytics: appkit.userAnalyticsBridge,
+      serviceAnalytics: { query: appkit.analytics.query },
       volume,
       lakebase: appkit.lakebase,
       server: appkit.server,

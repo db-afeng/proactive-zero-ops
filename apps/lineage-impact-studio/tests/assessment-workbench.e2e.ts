@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import type { Page, Route } from '@playwright/test';
 
 const REFERENCE = 'assessment_K4z7pq2X';
+const LOAN_EXPOSURE_ASSET = 'proactive_zero_ops_catalog.proactive_zero_ops_silver.loan_exposure';
 const HEAD_SHA = 'f1e2d3c4b5a697887766554433221100ffeeddcc';
 const PATCH_DIGEST = 'sha256:996a18d9270f53766792eb17edcf73d5540fe9dc56820cb5de161e1151c71dc8';
 const PROPOSAL_SHA = '1234567890abcdef1234567890abcdef12345678';
@@ -174,8 +175,115 @@ const assessment = {
   },
 };
 
+const usage = {
+  schemaVersion: 1,
+  assessmentReference: REFERENCE,
+  observedFrom: '2026-09-01T00:00:00Z',
+  observedThrough: '2026-09-30T23:59:59Z',
+  assets: [
+    {
+      asset: 'proactive_zero_ops_catalog.proactive_zero_ops_bronze.loan_accounts',
+      count: 0,
+      directCount: 0,
+      indirectCount: 0,
+      byType: { query: 0, dashboard: 0, genie: 0, notebook: 0, pipeline: 0, job: 0, alert: 0 },
+      complete: true,
+      objects: [],
+    },
+    {
+      asset: 'proactive_zero_ops_catalog.proactive_zero_ops_silver.loan_exposure',
+      count: 5,
+      directCount: 3,
+      indirectCount: 2,
+      byType: { query: 1, dashboard: 1, genie: 1, notebook: 1, pipeline: 1, job: 0, alert: 0 },
+      complete: true,
+      objects: [
+        {
+          kind: 'query',
+          title: 'Exposure watch query',
+          url: 'https://dbc-example.cloud.databricks.com/sql/queries/exposure-watch',
+          relation: 'direct',
+          viaAssets: [],
+          accessMode: 'read',
+          lastObservedAt: '2026-09-30T12:00:00Z',
+        },
+        {
+          kind: 'dashboard',
+          title: 'Credit exposure dashboard',
+          url: 'https://dbc-example.cloud.databricks.com/sql/dashboards/credit-exposure',
+          relation: 'direct',
+          viaAssets: [],
+          accessMode: 'read',
+          lastObservedAt: '2026-09-29T12:00:00Z',
+        },
+        {
+          kind: 'genie',
+          title: 'Loan analysis room',
+          url: 'https://dbc-example.cloud.databricks.com/genie/rooms/loan-analysis',
+          relation: 'direct',
+          viaAssets: [],
+          accessMode: 'read',
+          lastObservedAt: '2026-09-28T12:00:00Z',
+        },
+        {
+          kind: 'notebook',
+          title: 'Portfolio risk notebook',
+          url: 'https://dbc-example.cloud.databricks.com/editor/notebooks/portfolio-risk',
+          relation: 'indirect',
+          viaAssets: ['proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_loss'],
+          accessMode: 'read',
+          lastObservedAt: '2026-09-27T12:00:00Z',
+        },
+        {
+          kind: 'pipeline',
+          title: 'Expected loss refresh',
+          url: 'https://dbc-example.cloud.databricks.com/pipelines/expected-loss-refresh',
+          relation: 'indirect',
+          viaAssets: ['proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_loss'],
+          accessMode: 'read_write',
+          lastObservedAt: '2026-09-26T12:00:00Z',
+        },
+      ],
+    },
+    {
+      asset: 'proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_loss',
+      count: 2,
+      directCount: 2,
+      indirectCount: 0,
+      byType: { query: 1, dashboard: 1, genie: 0, notebook: 0, pipeline: 0, job: 0, alert: 0 },
+      complete: true,
+      objects: [
+        {
+          kind: 'query',
+          title: 'Loss trend query',
+          url: 'https://dbc-example.cloud.databricks.com/sql/queries/loss-trend',
+          relation: 'direct',
+          viaAssets: [],
+          accessMode: 'read',
+          lastObservedAt: '2026-09-30T12:00:00Z',
+        },
+        {
+          kind: 'dashboard',
+          title: 'Portfolio loss dashboard',
+          url: 'https://dbc-example.cloud.databricks.com/sql/dashboards/portfolio-loss',
+          relation: 'direct',
+          viaAssets: [],
+          accessMode: 'read',
+          lastObservedAt: '2026-09-29T12:00:00Z',
+        },
+      ],
+    },
+  ],
+};
+
 function impactNode(id: string, label: string, role: 'direct_break' | 'transitive_impact') {
-  return { id: `impact-${id}`, role, label, impactId: id };
+  const asset =
+    id === 'impact-1'
+      ? 'proactive_zero_ops_catalog.proactive_zero_ops_bronze.loan_accounts'
+      : id === 'impact-4'
+        ? 'proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_loss'
+        : 'proactive_zero_ops_catalog.proactive_zero_ops_silver.loan_exposure';
+  return { id: `impact-${id}`, role, label, asset, impactId: id };
 }
 
 function graphEdge(
@@ -238,6 +346,214 @@ test('explains the PR #4 break and keeps the default graph causal', async ({ pag
   await expect(page.getByText('secret_balance', { exact: false })).toHaveCount(0);
   await expect(page.getByText('Never render arbitrary model analysis.', { exact: true })).toHaveCount(0);
   await expect(page.getByText(`Reference ${REFERENCE}`, { exact: true }).first()).toBeVisible();
+});
+
+test('shows table-level consumer counts and keeps duplicate impact nodes synchronized', async ({ page }) => {
+  await page.goto(`/assessments/${REFERENCE}`);
+
+  const graph = page.getByLabel('Impact lineage graph');
+  await expect(graph.getByText(/visible objects observed in the last 30 days/)).toBeVisible();
+  const effectiveNode = graph.locator('.impact-node-direct-break').filter({ hasText: 'loan_exposure.effective_ead' });
+  const utilizationNode = graph
+    .locator('.impact-node-direct-break')
+    .filter({ hasText: 'loan_exposure.utilization_ratio' });
+  await expect(effectiveNode.locator('span[title^="5 distinct observed consumers"]')).toHaveText('5');
+  await expect(utilizationNode.locator('span[title^="5 distinct observed consumers"]')).toHaveText('5');
+  await expect(
+    graph
+      .locator('.impact-node-transitive')
+      .filter({ hasText: 'portfolio_expected_loss' })
+      .locator('span[title^="2 distinct observed consumers"]')
+  ).toHaveText('2');
+
+  const table = page.getByRole('button', { name: `Show observed consumers of ${LOAN_EXPOSURE_ASSET}` });
+  await expect(table).toContainText('5 consumers');
+  await table.click();
+  await expect(
+    page.getByText('Counts include visible objects observed in the last 30 days, regardless of impact scope.')
+  ).toBeVisible();
+  const consumers = page.getByRole('group', { name: `Observed consumers of ${LOAN_EXPOSURE_ASSET}`, exact: true });
+  const directLinks = consumers.getByRole('region', {
+    name: `Direct consumers of ${LOAN_EXPOSURE_ASSET}`,
+    exact: true,
+  });
+  const indirectLinks = consumers.getByRole('region', {
+    name: `Indirect consumers of ${LOAN_EXPOSURE_ASSET}`,
+    exact: true,
+  });
+  await expect(directLinks).toBeVisible();
+  await expect(indirectLinks).toBeVisible();
+  await expect(consumers.getByRole('link', { name: 'Open Query Exposure watch query in Databricks' })).toHaveAttribute(
+    'href',
+    'https://dbc-example.cloud.databricks.com/sql/queries/exposure-watch'
+  );
+  await expect(
+    consumers.getByRole('link', { name: 'Open Dashboard Credit exposure dashboard in Databricks' })
+  ).toBeVisible();
+  await expect(consumers.getByRole('link', { name: 'Open Genie room Loan analysis room in Databricks' })).toBeVisible();
+  await expect(
+    indirectLinks.getByRole('link', { name: 'Open Notebook Portfolio risk notebook in Databricks' })
+  ).toBeVisible();
+  await expect(indirectLinks.getByRole('listitem').filter({ hasText: 'Portfolio risk notebook' })).toContainText(
+    'Via proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_loss'
+  );
+
+  const effectiveRow = page.getByRole('button', { name: /Inspect direct impact on .*effective_ead/ });
+  const utilizationRow = page.getByRole('button', { name: /Inspect direct impact on .*utilization_ratio/ });
+  await effectiveRow.click();
+  await expect(effectiveRow).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: `Hide observed consumers of ${LOAN_EXPOSURE_ASSET}` })).toBeVisible();
+  await utilizationRow.click();
+  await expect(utilizationRow).toHaveAttribute('aria-pressed', 'true');
+  await expect(effectiveRow).toHaveAttribute('aria-pressed', 'false');
+  await expect(consumers).toBeVisible();
+});
+
+test('uses one type prefix for a verified dashboard fallback title', async ({ page }) => {
+  const fallbackUsage = structuredClone(usage);
+  const loanExposure = fallbackUsage.assets.find((entry) => entry.asset === LOAN_EXPOSURE_ASSET);
+  const dashboard = loanExposure?.objects.find((object) => object.kind === 'dashboard');
+  if (dashboard === undefined) throw new Error('Expected a dashboard fixture');
+  dashboard.title = 'Dashboard 01f1bd34786615c9b5b29d2cbfbc2112';
+
+  await page.unroute(`**/api/assessments/${REFERENCE}/usage`);
+  await page.route(`**/api/assessments/${REFERENCE}/usage`, async (route) => fulfillJson(route, fallbackUsage));
+  await page.goto(`/assessments/${REFERENCE}`);
+  await page.getByRole('button', { name: `Show observed consumers of ${LOAN_EXPOSURE_ASSET}` }).click();
+
+  const link = page.getByRole('link', { name: `Open ${dashboard.title} in Databricks` });
+  await expect(link).toHaveText(dashboard.title);
+  await expect(link).toHaveAttribute('href', dashboard.url);
+  await expect(link).toHaveAttribute('aria-label', `Open ${dashboard.title} in Databricks`);
+});
+
+test('opens the table group from keyboard-selected graph nodes and keeps their evidence distinct', async ({ page }) => {
+  await page.goto(`/assessments/${REFERENCE}`);
+
+  const graph = page.getByLabel('Impact lineage graph');
+  const effectiveNode = graph.getByTestId('rf__node-impact-impact-2');
+  await effectiveNode.focus();
+  await page.keyboard.press('Enter');
+  const openGroup = page.getByRole('button', { name: `Hide observed consumers of ${LOAN_EXPOSURE_ASSET}` });
+  await expect(openGroup).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByRole('heading', { name: 'loan_exposure.effective_ead' })).toBeVisible();
+
+  const utilizationNode = graph.getByTestId('rf__node-impact-impact-3');
+  await utilizationNode.focus();
+  await page.keyboard.press('Enter');
+  await expect(openGroup).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'loan_exposure.utilization_ratio' })).toBeVisible();
+
+  await openGroup.focus();
+  await page.keyboard.press('Space');
+  await expect(page.getByRole('button', { name: `Show observed consumers of ${LOAN_EXPOSURE_ASSET}` })).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  );
+});
+
+test('switches evidence between duplicate table nodes clicked on the graph', async ({ page }) => {
+  await page.setViewportSize({ width: 1082, height: 720 });
+  await page.goto(`/assessments/${REFERENCE}`);
+
+  const graph = page.getByLabel('Impact lineage graph');
+  const effectiveNode = graph.getByTestId('rf__node-impact-impact-2');
+  const utilizationNode = graph.getByTestId('rf__node-impact-impact-3');
+  const openGroup = page.getByRole('button', { name: `Hide observed consumers of ${LOAN_EXPOSURE_ASSET}` });
+  const effectiveRow = page.getByRole('button', { name: /Inspect direct impact on .*effective_ead/ });
+  const utilizationRow = page.getByRole('button', { name: /Inspect direct impact on .*utilization_ratio/ });
+
+  await effectiveNode.click();
+  await expect(openGroup).toHaveAttribute('aria-expanded', 'true');
+  await expect(effectiveRow).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('heading', { name: 'loan_exposure.effective_ead' })).toBeVisible();
+
+  await utilizationNode.click();
+  await expect(openGroup).toHaveAttribute('aria-expanded', 'true');
+  await expect(utilizationRow).toHaveAttribute('aria-pressed', 'true');
+  await expect(effectiveRow).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('heading', { name: 'loan_exposure.utilization_ratio' })).toBeVisible();
+});
+
+test('distinguishes complete zero use from partial observed use', async ({ page }) => {
+  const partial = structuredClone(usage);
+  const loanExposure = partial.assets.find((asset) => asset.asset === LOAN_EXPOSURE_ASSET);
+  if (loanExposure === undefined) throw new Error('Missing loan exposure fixture');
+  loanExposure.complete = false;
+  loanExposure.count = 1;
+  loanExposure.directCount = 1;
+  loanExposure.indirectCount = 0;
+  loanExposure.byType = { query: 1, dashboard: 0, genie: 0, notebook: 0, pipeline: 0, job: 0, alert: 0 };
+  loanExposure.objects = loanExposure.objects.slice(0, 1);
+  await page.unroute(`**/api/assessments/${REFERENCE}/usage`);
+  await page.route(`**/api/assessments/${REFERENCE}/usage`, async (route) => fulfillJson(route, partial));
+  await page.goto(`/assessments/${REFERENCE}`);
+
+  const partialTable = page.getByRole('button', { name: `Show observed consumers of ${LOAN_EXPOSURE_ASSET}` });
+  await expect(partialTable).toContainText('1+ consumers');
+  await partialTable.click();
+  await expect(page.getByText('Lower bound: 1 distinct observed consumers', { exact: true })).toBeVisible();
+  const partialDetails = page
+    .getByRole('button', { name: `Hide observed consumers of ${LOAN_EXPOSURE_ASSET}` })
+    .locator('..');
+  await expect(partialDetails).toContainText('1+ direct · 0+ indirect');
+  await expect(partialDetails.locator('dl div').filter({ hasText: 'Queries' }).locator('dd')).toHaveText('1+');
+  await expect(partialDetails.locator('dl div').filter({ hasText: 'Dashboards' }).locator('dd')).toHaveText('0+');
+  await expect(
+    partialDetails.getByRole('region', { name: `Indirect consumers of ${LOAN_EXPOSURE_ASSET}` })
+  ).toContainText('0+');
+  await expect(page.getByText(/Only accessible observed objects are listed/)).toBeVisible();
+
+  await page.getByRole('button', { name: /Inspect direct impact on .*effective_ead/ }).click();
+  await expect(page.getByRole('region', { name: `Observed usage of ${LOAN_EXPOSURE_ASSET}` })).toContainText(
+    '1+ direct · 0+ indirect'
+  );
+
+  const zeroAsset = 'proactive_zero_ops_catalog.proactive_zero_ops_bronze.loan_accounts';
+  const zeroTable = page.getByRole('button', { name: `Show observed consumers of ${zeroAsset}` });
+  await expect(zeroTable).toContainText('0 consumers');
+  await zeroTable.click();
+  await expect(page.getByText('No observed consumers', { exact: true })).toBeVisible();
+  await expect(page.getByText(/No visible objects observed in the last 30 days used this table/)).toBeVisible();
+});
+
+test('shows loading placeholders until the usage lookup resolves', async ({ page }) => {
+  let heldRoute: Route | null = null;
+  await page.unroute(`**/api/assessments/${REFERENCE}/usage`);
+  await page.route(`**/api/assessments/${REFERENCE}/usage`, (route) => {
+    heldRoute = route;
+  });
+  await page.goto(`/assessments/${REFERENCE}`);
+  await page.getByRole('button', { name: `Show observed consumers of ${LOAN_EXPOSURE_ASSET}` }).click();
+  await expect(page.getByRole('status', { name: 'Loading observed consumers' })).toBeVisible();
+  if (heldRoute === null) throw new Error('Usage request was not made');
+  await fulfillJson(heldRoute, usage);
+  await expect(page.getByRole('button', { name: `Hide observed consumers of ${LOAN_EXPOSURE_ASSET}` })).toContainText(
+    '5 consumers'
+  );
+});
+
+test('shows a retryable usage failure without implying zero consumers', async ({ page }) => {
+  let fail = true;
+  await page.unroute(`**/api/assessments/${REFERENCE}/usage`);
+  await page.route(`**/api/assessments/${REFERENCE}/usage`, async (route) => {
+    if (fail) {
+      fail = false;
+      await fulfillJson(route, { code: 'USAGE_UNAVAILABLE', message: 'Lineage query failed.' }, 503);
+    } else {
+      await fulfillJson(route, usage);
+    }
+  });
+  await page.goto(`/assessments/${REFERENCE}`);
+
+  const table = page.getByRole('button', { name: `Show observed consumers of ${LOAN_EXPOSURE_ASSET}` });
+  await expect(table).toContainText('Usage unavailable');
+  await table.click();
+  await expect(page.getByText('Usage unavailable', { exact: true }).last()).toBeVisible();
+  await page.getByRole('button', { name: 'Retry usage' }).click();
+  await expect(page.getByRole('button', { name: `Hide observed consumers of ${LOAN_EXPOSURE_ASSET}` })).toContainText(
+    '5 consumers'
+  );
 });
 
 test('synchronizes graph filters, impact selection, and GitHub-gated source evidence', async ({ page }) => {
@@ -363,8 +679,12 @@ test('keeps the assessment usable without horizontal page overflow at desktop an
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByLabel('Impact lineage graph')).toBeHidden();
   await expect(page.getByRole('heading', { name: 'Impact list' })).toBeVisible();
+  await page.getByRole('button', { name: `Show observed consumers of ${LOAN_EXPOSURE_ASSET}` }).click();
+  await expect(page.getByRole('link', { name: 'Open Query Exposure watch query in Databricks' })).toBeVisible();
   await page.getByRole('button', { name: /Inspect direct impact on .*effective_ead/ }).click();
-  await expect(page.getByRole('dialog', { name: 'Impact evidence' })).toBeVisible();
+  const mobileInspector = page.getByRole('dialog', { name: 'Impact evidence' });
+  await expect(mobileInspector).toBeVisible();
+  await expect(mobileInspector.getByText('5 distinct observed consumers', { exact: true })).toBeVisible();
 
   const viewport = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
@@ -588,6 +908,9 @@ async function mockAssessmentApis(page: Page) {
       return;
     }
     await fulfillJson(route, assessment);
+  });
+  await page.route(`**/api/assessments/${REFERENCE}/usage`, async (route) => {
+    await fulfillJson(route, usage);
   });
   await page.route('**/api/github/status', async (route) => {
     await fulfillJson(route, { connected: true, login: 'workspace-reviewer' });

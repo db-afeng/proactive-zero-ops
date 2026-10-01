@@ -1,0 +1,13 @@
+resources:
+  genie_spaces:
+    loan_portfolio_explorer:
+      title: PZO Demo | Loan Portfolio Explorer
+      description: Explore synthetic loan exposure and utilization by product, region, and risk grade.
+      file_path: ../src/credit_risk/consumers/genie/loan_portfolio_explorer.geniespace.json
+      warehouse_id: ${resources.sql_warehouses.lineage_guard.id}
+
+    expected_loss_explorer:
+      title: PZO Demo | Expected Loss Explorer
+      description: Explore illustrative expected loss by region, product, and risk grade.
+      file_path: ../src/credit_risk/consumers/genie/expected_loss_explorer.geniespace.json
+      warehouse_id: ${resources.sql_warehouses.lineage_guard.id}

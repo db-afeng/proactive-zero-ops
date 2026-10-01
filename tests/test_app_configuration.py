@@ -4,7 +4,6 @@ from pathlib import Path
 
 import yaml
 
-
 ROOT = Path(__file__).resolve().parents[1]
 APP_NAME = "lineage_impact_studio"
 CALLBACK = (
@@ -50,3 +49,31 @@ def test_bundle_declares_both_github_secret_resources() -> None:
         "key": "${var.lineage_impact_github_client_secret_secret_key}",
         "permission": "READ",
     }
+
+
+def test_live_usage_has_matching_obo_scopes_and_lineage_grant() -> None:
+    bundles = (
+        (ROOT / "resources/lineage_impact_studio.app.yml", APP_NAME),
+        (ROOT / "apps/lineage-impact-studio/databricks.yml", "app"),
+    )
+    for path, resource_name in bundles:
+        config = yaml.safe_load(path.read_text())
+        app = config["resources"]["apps"][resource_name]
+        assert set(app["user_api_scopes"]) == {
+            "sql",
+            "genie",
+            "workspace.workspace:read",
+        }
+        lineage_resources = [
+            item["uc_securable"]
+            for item in app["resources"]
+            if item.get("uc_securable", {}).get("securable_full_name")
+            == "system.access.table_lineage"
+        ]
+        assert lineage_resources == [
+            {
+                "securable_full_name": "system.access.table_lineage",
+                "securable_type": "TABLE",
+                "permission": "SELECT",
+            }
+        ]

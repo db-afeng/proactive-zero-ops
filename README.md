@@ -110,3 +110,44 @@ The deployed demo in workspace `7474650525906616` uses pipeline
 `af63282c-f470-4770-97b5-bab16c8c7113` and SQL warehouse `4604ceea74f29ea8`.
 Resource IDs remain stable across normal bundle updates but should be checked
 with `databricks bundle summary` after a destructive redeployment.
+
+## Demo SQL consumers for impact assessment
+
+The root bundle also defines three read-only AI/BI dashboards and two Genie spaces
+over the synthetic downstream tables. The dashboards use bundle-provided catalog
+and schema settings; the Genie space JSON currently names the `dev` catalog and
+schemas. The consumer mix is intentionally uneven so the impact map has distinct
+levels: `loan_exposure` has four saved queries, two dashboards, and one Genie space;
+`portfolio_expected_loss` has two queries, one dashboard, and one Genie space;
+`sector_concentration` has one query.
+
+Saved SQL queries are managed through the Queries API, and an unscheduled Jobs SQL
+task runs each saved query by ID. This produces query-linked lineage rather than
+anonymous ad hoc SQL lineage. Provision or refresh the consumers after deploying
+the root bundle:
+
+```bash
+export DATABRICKS_AUTH_STORAGE=plaintext
+databricks bundle validate --strict --target dev --profile fe-sandbox-proactive-zero-ops
+databricks bundle deploy --target dev --profile fe-sandbox-proactive-zero-ops
+uv run python scripts/provision_credit_risk_consumers.py \
+  --profile fe-sandbox-proactive-zero-ops \
+  --warehouse-id 4604ceea74f29ea8 \
+  --run
+```
+
+The script is idempotent: it reuses its tagged saved queries and Job, updates
+changed SQL, runs all seven tasks only when `--run` is supplied, then checks that
+each query ID appears against its expected source table in
+`system.access.table_lineage.entity_metadata.sql_query_id`. System lineage can lag
+the Job, so the check waits up to twenty minutes by default. To recheck without
+changing or running resources, use `--verify-only` in place of `--run`.
+
+Lineage confirms that the demo objects ran, while the app counts only objects
+it can verify with the current viewer's OBO token. New app scopes require fresh
+viewer consent, and unavailable object-check scopes leave labelled lower
+bounds in the impact map and list.
+
+Open each deployed dashboard and ask one of the sample questions in each Genie
+space to generate their own observed usage lineage. Creating dashboard and Genie
+resources alone does not count as a query of their source tables.

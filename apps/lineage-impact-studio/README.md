@@ -13,6 +13,24 @@ Databricks identity, and can review and approve one guarded remediation commit.
   with the signed-in user's forwarded token and the `sql` OBO scope. Missing,
   denied, timed-out, over-budget, or otherwise unresolved checks fail closed;
   they never fall back to the service principal or scan `information_schema`.
+- The live usage route reads a 30-day window of `system.access.table_lineage`
+  with the app service principal, constrained to this workspace and the
+  assessment paths already authorized for the viewer. A named query,
+  dashboard, Genie space, notebook, pipeline, job, or alert contributes to a
+  visible count only after its own OBO access check succeeds. Anonymous SQL
+  runs are not named consumers; unresolved access checks make the count a
+  labelled lower bound rather than a false zero.
+- App OBO consent can lag a scope change. The viewer must complete a fresh
+  Databricks app authorization when a new declared scope is deployed.
+  Lakeview dashboard permission checks accept a dashboard UUID but return its
+  numeric workspace object ID; the app verifies that response and an explicit
+  viewer ACL entry before counting the dashboard. Job and pipeline permission
+  checks require `access-management` under the viewer's OBO token, but
+  Databricks Apps does not support that user scope. Its default
+  `iam.access-control:read` scope does not authorize this permissions API.
+  Until Apps supports a viewer-scoped permission check for these objects, they
+  remain omitted and the count remains a labelled lower bound. Never
+  substitute the app service principal for a viewer check.
 - `files.files` is intentionally not an OBO scope. Generic AppKit Files routes
   must remain denied; the service reads only validated envelope paths.
 - Restricted envelope v3 publishes deterministic `display_evidence` alongside
@@ -58,7 +76,8 @@ Databricks identity, and can review and approve one guarded remediation commit.
 | Lakebase branch   | `projects/lineage-impact-studio/branches/production`                                  |
 | Lakebase database | `projects/lineage-impact-studio/branches/production/databases/databricks-postgres`    |
 | App-owned schema  | `lineage_impact`                                                                      |
-| OBO scopes        | `sql` only                                                                            |
+| Lineage table     | `system.access.table_lineage` with app service-principal `SELECT`                     |
+| OBO scopes        | `sql`, `genie`, `workspace.workspace:read`                                            |
 
 `app.yaml` receives the warehouse, Volume, Lakebase endpoint, and encryption
 key through `valueFrom` resource bindings. Databricks also injects the deployed
@@ -175,6 +194,11 @@ both a changed node and an impacted node and confirm that:
 
 The Playwright sample test is the automated regression gate for header types;
 the embedded-browser check confirms the real deployed query contract and UI.
+For live usage, verify distinct counts on the current assessment URL, grouped
+direct and indirect consumers, same counts on duplicate table nodes, and a
+Databricks link for each visible object. Check that a denied object never
+contributes its name, link, or count, and that lineage or metadata failures
+render a partial or unavailable state instead of zero.
 
 Configuration validation succeeded on 2026-09-28. Full Apps validation reached
 type checking and was not green at that point, so it is not a deployment
@@ -189,6 +213,8 @@ the workflow's canonical app URL. Enable deep links only for newly published
 assessments; do not backfill historical v2 evidence. After the guard and app
 are deployed together, close PR #4 and open a replacement from the same branch
 to publish a v3 assessment and verify the complete causal chain before wider
-rollout. Confirm query history contains only zero-row OBO probes during initial
-load, no broad privilege query, and dataset sample queries only after an
-authorized changed or impacted node is selected.
+rollout. Confirm the viewer's initial warehouse queries remain zero-row OBO
+probes; the separately authorized usage lookup is a bounded app-principal
+query of `system.access.table_lineage`. There must be no `information_schema`
+scan, and dataset sample queries must run only after an authorized changed or
+impacted node is selected.

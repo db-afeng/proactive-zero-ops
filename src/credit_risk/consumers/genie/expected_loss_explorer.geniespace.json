@@ -1,0 +1,57 @@
+{
+  "version": 2,
+  "config": {
+    "sample_questions": [
+      {
+        "id": "10000000000000000000000000000011",
+        "question": ["Which regions have the highest illustrative expected loss?"]
+      },
+      {
+        "id": "10000000000000000000000000000012",
+        "question": ["How does illustrative expected loss vary by risk grade?"]
+      },
+      {
+        "id": "10000000000000000000000000000013",
+        "question": ["Which product types contribute most to expected loss?"]
+      }
+    ]
+  },
+  "data_sources": {
+    "tables": [
+      {
+        "identifier": "proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_loss"
+      }
+    ]
+  },
+  "instructions": {
+    "example_question_sqls": [
+      {
+        "id": "20000000000000000000000000000011",
+        "question": ["Which regions have the highest illustrative expected loss?"],
+        "sql": [
+          "SELECT region, SUM(account_count) AS account_count, SUM(total_ead) AS total_ead_aud, SUM(expected_loss) AS expected_loss_aud\n",
+          "FROM proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_loss\n",
+          "GROUP BY region ORDER BY expected_loss_aud DESC"
+        ]
+      },
+      {
+        "id": "20000000000000000000000000000012",
+        "question": ["How does illustrative expected loss vary by risk grade?"],
+        "sql": [
+          "SELECT risk_grade, SUM(account_count) AS account_count, SUM(expected_loss) AS expected_loss_aud\n",
+          "FROM proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_loss\n",
+          "GROUP BY risk_grade ORDER BY risk_grade"
+        ]
+      }
+    ],
+    "text_instructions": [
+      {
+        "id": "30000000000000000000000000000011",
+        "content": [
+          "Use portfolio_expected_loss for region, product, and risk-grade aggregate questions. Sum expected_loss for illustrative expected loss and total_ead for gross exposure at default. If calculating a loss rate, divide SUM(expected_loss) by NULLIF(SUM(total_ead), 0).\n",
+          "The data is synthetic and contains one snapshot date. State amounts in Australian dollars and describe them as illustrative. It is not an IFRS 9 or regulatory calculation."
+        ]
+      }
+    ]
+  }
+}

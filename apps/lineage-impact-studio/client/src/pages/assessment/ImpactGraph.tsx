@@ -1,5 +1,13 @@
 import dagre from '@dagrejs/dagre';
-import { Button, ButtonGroup, Tooltip, TooltipContent, TooltipTrigger } from '@databricks/appkit-ui/react';
+import {
+  Badge,
+  Button,
+  ButtonGroup,
+  Skeleton,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@databricks/appkit-ui/react';
 import {
   Background,
   BackgroundVariant,
@@ -17,20 +25,22 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import { Focus, LocateFixed } from 'lucide-react';
-import { useMemo } from 'react';
+import { useMemo, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 
 import type { AssessmentChange, AssessmentGraphEdge, AssessmentGraphNode, AssessmentImpact } from '@/lib/contracts';
 
 import { operationLabel } from './impact-copy';
+import { usageCount, type UsageCountDisplay, type UsageLoadState } from './usage-model';
 
 import '@xyflow/react/dist/style.css';
 
 const NODE_WIDTH = 280;
-const NODE_HEIGHT = 72;
+const NODE_HEIGHT = 76;
 
 interface GraphNodeData extends Record<string, unknown> {
   graphNode: AssessmentGraphNode;
   detail: string;
+  consumerCount?: UsageCountDisplay;
 }
 
 interface GraphEdgeData extends Record<string, unknown> {
@@ -45,6 +55,7 @@ export function ImpactGraph({
   edges,
   impacts,
   changes,
+  usage,
   selectedId,
   onSelect,
 }: {
@@ -52,46 +63,72 @@ export function ImpactGraph({
   edges: AssessmentGraphEdge[];
   impacts: AssessmentImpact[];
   changes: AssessmentChange[];
+  usage: UsageLoadState;
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
-  const layout = useMemo(() => layoutGraph(nodes, edges, impacts, changes), [nodes, edges, impacts, changes]);
+  const layout = useMemo(
+    () => layoutGraph(nodes, edges, impacts, changes, usage),
+    [nodes, edges, impacts, changes, usage]
+  );
+
+  function selectFromKeyboard(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const isNode = target.classList.contains('react-flow__node');
+    const isEdge = target.classList.contains('react-flow__edge');
+    if (!isNode && !isEdge) return;
+    const id = (target as HTMLElement | SVGElement).dataset.id;
+    if (id === undefined) return;
+    if (isNode && !layout.nodes.some((node) => node.id === id)) return;
+    if (isEdge && !layout.edges.some((edge) => edge.id === id)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onSelect(id);
+  }
+
   return (
     <ReactFlowProvider>
-      <div
-        className="impact-graph-canvas relative h-[23rem] overflow-hidden rounded-sm border border-border bg-background"
-        aria-label="Impact lineage graph"
-      >
-        <ReactFlow<FlowNode, FlowEdge>
-          nodes={layout.nodes.map((node) => ({ ...node, selected: node.id === selectedId }))}
-          edges={layout.edges.map((edge) => ({ ...edge, selected: edge.id === selectedId }))}
-          nodeTypes={{ impact: ImpactNode }}
-          edgeTypes={{ evidence: EvidenceEdge }}
-          onNodeClick={(_event, node) => onSelect(node.id)}
-          onEdgeClick={(_event, edge) => onSelect(edge.id)}
-          fitView
-          fitViewOptions={{ padding: 0.12, maxZoom: 1.05 }}
-          minZoom={0.35}
-          maxZoom={1.5}
-          nodesDraggable={false}
-          nodesConnectable={false}
-          elementsSelectable
-          elevateEdgesOnSelect
-          proOptions={{ hideAttribution: true }}
-        >
-          <Background
-            id="impact-grid"
-            variant={BackgroundVariant.Dots}
-            gap={16}
-            size={1}
-            color="var(--muted-foreground)"
-            style={{ opacity: 0.25 }}
-          />
-          <GraphControls changedNodeId={nodes.find((node) => node.role === 'changed')?.id} />
-        </ReactFlow>
-        <div className="pointer-events-none absolute bottom-2 left-2 flex flex-wrap gap-x-4 gap-y-1.5 bg-background/90 px-2 py-1.5 text-xs text-muted-foreground">
+      <div className="overflow-hidden rounded-sm border border-border bg-background" aria-label="Impact lineage graph">
+        <div className="impact-graph-canvas relative h-[23rem]" onKeyDownCapture={selectFromKeyboard}>
+          <ReactFlow<FlowNode, FlowEdge>
+            nodes={layout.nodes.map((node) => ({ ...node, selected: node.id === selectedId }))}
+            edges={layout.edges.map((edge) => ({ ...edge, selected: edge.id === selectedId }))}
+            nodeTypes={{ impact: ImpactNode }}
+            edgeTypes={{ evidence: EvidenceEdge }}
+            onNodeClick={(_event, node) => onSelect(node.id)}
+            onEdgeClick={(_event, edge) => onSelect(edge.id)}
+            fitView
+            fitViewOptions={{ padding: 0.12, maxZoom: 1.05 }}
+            minZoom={0.35}
+            maxZoom={1.5}
+            nodesDraggable={false}
+            nodesConnectable={false}
+            elementsSelectable
+            elevateEdgesOnSelect
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background
+              id="impact-grid"
+              variant={BackgroundVariant.Dots}
+              gap={16}
+              size={1}
+              color="var(--muted-foreground)"
+              style={{ opacity: 0.25 }}
+            />
+            <GraphControls changedNodeId={nodes.find((node) => node.role === 'changed')?.id} />
+          </ReactFlow>
+        </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5 border-t border-border px-3 py-2 text-xs text-muted-foreground">
           <LegendLine label="Observed lineage" />
           <LegendLine label="Proposed-code lineage" dashed />
+          <span className="inline-flex items-center gap-1.5">
+            <span className="rounded-sm border border-border bg-background px-1 font-mono text-xs font-semibold text-foreground">
+              #
+            </span>
+            visible objects observed in the last 30 days
+          </span>
         </div>
       </div>
     </ReactFlowProvider>
@@ -170,11 +207,25 @@ function ImpactNode({ data, selected }: NodeProps<FlowNode>) {
   }[node.role];
   return (
     <div
-      className={`h-[72px] w-[280px] rounded-sm border px-3 py-2 text-left shadow-none ${roleClass} ${selected ? 'impact-node-selected' : ''}`}
+      className={`h-[76px] w-[280px] rounded-sm border px-3 py-2 text-left shadow-none ${roleClass} ${selected ? 'impact-node-selected' : ''}`}
       aria-label={`${roleLabel}: ${node.label}`}
     >
       <Handle type="target" position={Position.Left} className="!size-2 !border-background !bg-muted-foreground" />
-      <p className={`text-xs font-semibold uppercase tracking-wide ${roleLabelClass}`}>{roleLabel}</p>
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <p className={`min-w-0 truncate text-xs font-semibold uppercase tracking-wide ${roleLabelClass}`}>
+          {roleLabel}
+        </p>
+        {data.consumerCount === undefined ? null : (
+          <Badge
+            variant="outline"
+            className="shrink-0 rounded-sm bg-background px-1.5 py-0 font-mono text-xs font-semibold tabular-nums text-foreground"
+            aria-label={data.consumerCount.label}
+            title={data.consumerCount.label}
+          >
+            {data.consumerCount.status === 'loading' ? <Skeleton className="h-3 w-3" /> : data.consumerCount.text}
+          </Badge>
+        )}
+      </div>
       <p className="mt-0.5 truncate font-mono text-sm font-medium leading-5" title={node.label}>
         {node.label}
       </p>
@@ -226,15 +277,19 @@ function layoutGraph(
   nodes: AssessmentGraphNode[],
   edges: AssessmentGraphEdge[],
   impacts: AssessmentImpact[],
-  changes: AssessmentChange[]
+  changes: AssessmentChange[],
+  usage: UsageLoadState
 ): { nodes: FlowNode[]; edges: FlowEdge[] } {
   const graph = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
+  const impactedAssets = new Set(impacts.map((impact) => impact.targetAsset));
   graph.setGraph({ rankdir: 'LR', ranksep: 112, nodesep: 18, marginx: 32, marginy: 36 });
   for (const node of nodes) graph.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
   for (const edge of [...edges].reverse()) graph.setEdge(edge.source, edge.target);
   dagre.layout(graph);
   return {
     nodes: nodes.map((node) => {
+      const consumerCount =
+        node.asset !== undefined && impactedAssets.has(node.asset) ? usageCount(usage, node.asset) : undefined;
       const position = graph.node(node.id) as { x: number; y: number } | undefined;
       const restrictedTarget =
         node.role === 'restricted' ? edges.find((edge) => edge.source === node.id)?.target : undefined;
@@ -250,8 +305,9 @@ function layoutGraph(
               ? restrictedTargetPosition.y - NODE_HEIGHT / 2 - 92
               : (position?.y ?? 0) - NODE_HEIGHT / 2,
         },
-        data: { graphNode: node, detail: nodeDetail(node, impacts, changes) },
-        ariaLabel: `${node.role.replaceAll('_', ' ')}: ${node.label}`,
+        data: { graphNode: node, detail: nodeDetail(node, impacts, changes), consumerCount },
+        ariaRole: 'button',
+        ariaLabel: `${node.role.replaceAll('_', ' ')}: ${node.label}${consumerCount === undefined ? '' : `; ${consumerCount.label}`}`,
       };
     }),
     edges: edges.map((edge) => ({
@@ -262,6 +318,7 @@ function layoutGraph(
       data: { graphEdge: edge },
       markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--muted-foreground)', width: 14, height: 14 },
       animated: false,
+      ariaRole: 'button',
       ariaLabel: `${edge.origin.replaceAll('_', ' ')} ${edge.evidenceLevel} evidence`,
     })),
   };
