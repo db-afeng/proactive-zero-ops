@@ -713,6 +713,8 @@ def _resolve_configuration(
             continue
         for match in _SUBSTITUTION.finditer(value):
             token = match.group(1)
+            if _is_consumer_warehouse_id_reference(result, path, value, token):
+                continue
             dynamic = token.startswith(("workspace.", "secrets.", "env.")) or token.endswith(".id")
             issues.append(
                 DiscoveryIssue(
@@ -725,6 +727,31 @@ def _resolve_configuration(
                 )
             )
     return result
+
+
+def _is_consumer_warehouse_id_reference(
+    configuration: Mapping[str, Any],
+    path: tuple[str, ...],
+    value: str,
+    token: str,
+) -> bool:
+    """Allow a declared warehouse's runtime ID only where it cannot alter SQL discovery."""
+    if (
+        len(path) != 4
+        or path[0] != "resources"
+        or path[1] not in {"dashboards", "genie_spaces"}
+        or path[3] != "warehouse_id"
+        or value != f"${{{token}}}"
+    ):
+        return False
+    parts = token.split(".")
+    if len(parts) != 4 or parts[:2] != ["resources", "sql_warehouses"] or parts[3] != "id":
+        return False
+    resources = configuration.get("resources")
+    if not isinstance(resources, Mapping):
+        return False
+    warehouses = resources.get("sql_warehouses")
+    return isinstance(warehouses, Mapping) and isinstance(warehouses.get(parts[2]), Mapping)
 
 
 class _Unresolved:

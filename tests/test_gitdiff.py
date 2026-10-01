@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from lineage_guard.gitdiff import ChangeSet, collect_changes
 from lineage_guard.models import EvidenceOrigin
 
@@ -97,6 +99,82 @@ def create_pipeline_repo(tmp_path: Path, sql_files: dict[str, str]) -> tuple[Pat
     }
     files.update({f"src/pipeline/{name}": sql for name, sql in sql_files.items()})
     return repo, commit_files(repo, files, "base")
+
+
+def create_consumer_change_repo(tmp_path: Path) -> tuple[Path, str, str]:
+    repo, _ = create_pipeline_repo(tmp_path, {"accounts.sql": materialized_view("accounts")})
+    base = commit_files(
+        repo,
+        {
+            "resources/warehouse.yml": """
+resources:
+  sql_warehouses:
+    risk:
+      name: risk-warehouse
+""",
+            "resources/app.yml": """
+resources:
+  apps:
+    studio:
+      name: impact-studio
+      source_code_path: ../apps/studio
+      user_api_scopes:
+        - sql
+      resources:
+        - name: files
+          uc_securable:
+            securable_full_name: dev_catalog.control.envelopes
+            securable_type: VOLUME
+            permission: READ_VOLUME
+""",
+        },
+        "baseline consumers",
+    )
+    head = commit_files(
+        repo,
+        {
+            "resources/dashboard.yml": """
+resources:
+  dashboards:
+    exposure:
+      file_path: ../src/consumers/exposure.lvdash.json
+      warehouse_id: ${resources.sql_warehouses.risk.id}
+""",
+            "resources/genie.yml": """
+resources:
+  genie_spaces:
+    explorer:
+      file_path: ../src/consumers/explorer.geniespace.json
+      warehouse_id: ${resources.sql_warehouses.risk.id}
+""",
+            "resources/app.yml": """
+resources:
+  apps:
+    studio:
+      name: impact-studio
+      source_code_path: ../apps/studio
+      user_api_scopes:
+        - sql
+        - genie
+        - workspace.workspace:read
+      resources:
+        - name: files
+          uc_securable:
+            securable_full_name: dev_catalog.control.envelopes
+            securable_type: VOLUME
+            permission: READ_VOLUME
+        - name: table-lineage
+          uc_securable:
+            securable_full_name: system.access.table_lineage
+            securable_type: TABLE
+            permission: SELECT
+""",
+            "src/consumers/exposure.lvdash.json": "{}\n",
+            "src/consumers/explorer.geniespace.json": "{}\n",
+        },
+        "add read-only consumers",
+    )
+    return repo, base, head
 
 
 def change_by_paths(changes: ChangeSet, before: str | None, after: str | None):
@@ -351,4 +429,87 @@ resources:
         issue.code == "unsupported_changed_source_language" and issue.path == "src/jobs/prepare.py"
         for issue in changes.issues
     )
+    assert changes.has_relevant_changes
+
+
+def test_consumer_only_bundle_changes_do_not_require_output_datasets(tmp_path: Path) -> None:
+    repo, base, head = create_consumer_change_repo(tmp_path)
+
+    changes = collect_changes(repo, base, head, target="dev")
+
+    assert changes.complete, changes.issues
+    assert {
+        change.after.identity for change in changes.bundle_changes.resource_changes if change.after
+    } == {
+        "apps.studio",
+        "dashboards.exposure",
+        "genie_spaces.explorer",
+    }
+    assert changes.affected_datasets == frozenset()
+    assert not changes.has_relevant_changes
+
+
+def test_consumer_changes_do_not_hide_a_producer_sql_change(tmp_path: Path) -> None:
+    repo, base, consumer_head = create_consumer_change_repo(tmp_path)
+    head = commit_files(
+        repo,
+        {
+            "src/pipeline/accounts.sql": materialized_view("accounts").replace(
+                "WHERE active = true", "WHERE active = false"
+            )
+        },
+        "change produced dataset",
+    )
+
+    changes = collect_changes(repo, base, head, target="dev")
+
+    assert consumer_head != head
+    assert changes.complete, changes.issues
+    assert changes.has_relevant_changes
+    assert changes.affected_datasets == {"dev_catalog.dev_bronze.accounts"}
+
+
+def test_app_write_grant_remains_a_relevant_change(tmp_path: Path) -> None:
+    repo, base, _ = create_consumer_change_repo(tmp_path)
+    app_path = repo / "resources/app.yml"
+    head = commit_files(
+        repo,
+        {
+            "resources/app.yml": app_path.read_text()
+            + """        - name: table-write
+          uc_securable:
+            securable_full_name: dev_catalog.dev_bronze.accounts
+            securable_type: TABLE
+            permission: MODIFY
+"""
+        },
+        "add write binding",
+    )
+
+    changes = collect_changes(repo, base, head, target="dev")
+
+    assert changes.complete, changes.issues
+    assert changes.affected_datasets == frozenset()
+    assert changes.has_relevant_changes
+
+
+@pytest.mark.parametrize("resource_type", ["jobs", "pipelines", "future_resources"])
+def test_producer_or_unknown_resource_without_output_remains_relevant(
+    tmp_path: Path, resource_type: str
+) -> None:
+    repo, base = create_pipeline_repo(tmp_path, {"accounts.sql": materialized_view("accounts")})
+    head = commit_files(
+        repo,
+        {
+            "resources/new_resource.yml": (
+                f"resources:\n  {resource_type}:\n    new_resource:\n      name: new-resource\n"
+            )
+        },
+        "add non-consumer resource",
+    )
+
+    changes = collect_changes(repo, base, head, target="dev")
+
+    assert changes.complete, changes.issues
+    assert changes.affected_datasets == frozenset()
     assert changes.has_relevant_changes

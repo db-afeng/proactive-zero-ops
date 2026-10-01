@@ -320,7 +320,7 @@ def assess(args: argparse.Namespace) -> int:
         elif not changes.has_relevant_changes:
             result = GuardResult(
                 status="pass",
-                summary="No semantic SQL or effective bundle change was discovered.",
+                summary="No output-producing SQL or bundle change was discovered.",
                 changed_files=changes.changed_files,
             )
         elif not changes.affected_datasets:
