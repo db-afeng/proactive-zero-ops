@@ -178,6 +178,7 @@ export class FixService {
     assessment: AssessmentViewV3;
     credential: GitHubUserCredential;
     omnigentAuth: OmnigentAuthContext;
+    propagateAuthFailure?: boolean;
   }): Promise<OmnigentSessionView> {
     if (isTerminal(input.session.status)) return input.session;
     if (input.session.providerSessionId === null) {
@@ -201,6 +202,13 @@ export class FixService {
       if (remote.value.status !== 'idle') return input.session;
       return await this.finalize({ ...input, providerSessionId: input.session.providerSessionId });
     } catch (error) {
+      if (
+        input.propagateAuthFailure &&
+        error instanceof OmnigentIntegrationError &&
+        (error.code === 'unauthorized' || error.code === 'forbidden')
+      ) {
+        throw error;
+      }
       if (error instanceof OmnigentIntegrationError && error.retryable) {
         return await this.updateMessage(
           input.session,

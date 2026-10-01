@@ -1,6 +1,72 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { WorkspaceGitCredentialClient } from './git-credential-client';
+import { UserWorkspaceGitCredentialClient, WorkspaceGitCredentialClient } from './git-credential-client';
+
+const USER_TOKEN = 'user-access-token-for-tests';
+
+describe('user-owned Git credentials', () => {
+  it('selects the default GitHub credential using the forwarded user token', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          credentials: [
+            { credential_id: '111', git_provider: 'gitLab', is_default_for_provider: true },
+            { credential_id: '222', git_provider: 'gitHub', is_default_for_provider: false },
+            { credential_id: '333', git_provider: 'gitHubOAuth', is_default_for_provider: true },
+          ],
+        }),
+        { status: 200 }
+      )
+    );
+    const client = new UserWorkspaceGitCredentialClient({
+      workspaceHost: 'workspace.example.databricks.com',
+      fetchImplementation: fetchMock,
+    });
+
+    await expect(client.preferredGitHubCredentialId(USER_TOKEN)).resolves.toBe(333);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, options] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe('https://workspace.example.databricks.com/api/2.0/git-credentials');
+    expect(options?.method).toBe('GET');
+    expect(options?.signal).toBeInstanceOf(AbortSignal);
+    expect(options?.headers).toEqual({ Authorization: `Bearer ${USER_TOKEN}`, Accept: 'application/json' });
+  });
+
+  it('uses a sole GitHub credential when none is marked default', async () => {
+    const client = userClientWithCredentials([
+      { credential_id: 444, git_provider: 'gitHub' },
+      { credential_id: 555, git_provider: 'gitLab' },
+    ]);
+    await expect(client.preferredGitHubCredentialId(USER_TOKEN)).resolves.toBe(444);
+  });
+
+  it('does not guess among multiple GitHub credentials', async () => {
+    const client = userClientWithCredentials([
+      { credential_id: 444, git_provider: 'gitHub' },
+      { credential_id: 555, git_provider: 'gitHub' },
+    ]);
+    await expect(client.preferredGitHubCredentialId(USER_TOKEN)).rejects.toMatchObject({
+      code: 'git_credential_ambiguous',
+    });
+  });
+
+  it('reports a missing user credential without creating one under the app identity', async () => {
+    const client = userClientWithCredentials([]);
+    await expect(client.preferredGitHubCredentialId(USER_TOKEN)).rejects.toMatchObject({
+      code: 'git_credential_missing',
+    });
+  });
+
+  it('reports when the app user token lacks Git credential access', async () => {
+    const client = new UserWorkspaceGitCredentialClient({
+      workspaceHost: 'workspace.example.databricks.com',
+      fetchImplementation: vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 403 })),
+    });
+    await expect(client.preferredGitHubCredentialId(USER_TOKEN)).rejects.toMatchObject({
+      code: 'git_credential_access_denied',
+    });
+  });
+});
 
 describe('app-owned Git credential lifecycle', () => {
   it('registers a private-repository token under the app identity and deletes it', async () => {
@@ -36,3 +102,12 @@ describe('app-owned Git credential lifecycle', () => {
     expect(fetchMock.mock.calls[1]?.[1]?.method).toBe('DELETE');
   });
 });
+
+function userClientWithCredentials(credentials: object[]): UserWorkspaceGitCredentialClient {
+  return new UserWorkspaceGitCredentialClient({
+    workspaceHost: 'workspace.example.databricks.com',
+    fetchImplementation: vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify({ credentials }), { status: 200 })),
+  });
+}

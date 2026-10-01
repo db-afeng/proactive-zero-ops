@@ -9,6 +9,9 @@ export type OmnigentIntegrationErrorCode =
   | 'unavailable'
   | 'invalid_response'
   | 'git_credential_unavailable'
+  | 'git_credential_access_denied'
+  | 'git_credential_missing'
+  | 'git_credential_ambiguous'
   | 'request_failed';
 
 /** A sanitized error which never carries response bodies, prompts, or credentials. */
@@ -46,6 +49,12 @@ function messageFor(code: OmnigentIntegrationErrorCode): string {
       return 'Omnigent returned an invalid response';
     case 'git_credential_unavailable':
       return 'Databricks could not prepare private repository access for Omnigent';
+    case 'git_credential_access_denied':
+      return 'The app cannot read your Databricks Git credentials. Check its workspace authorization and try again.';
+    case 'git_credential_missing':
+      return 'Add a GitHub Git credential to your Databricks workspace before starting a manual fix.';
+    case 'git_credential_ambiguous':
+      return 'Set one GitHub Git credential as your workspace default before starting a manual fix.';
     case 'request_failed':
       return 'Omnigent request failed';
   }

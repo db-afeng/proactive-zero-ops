@@ -329,6 +329,63 @@ export class LineageImpactRepository {
     return { codeVerifier: parsed.data.pkce_verifier };
   }
 
+  /** Retain a user-authorized Omnigent token only until its short access-token expiry. */
+  async saveDatabricksFixAuthorization(input: {
+    actorSubject: string;
+    accessToken: string;
+    expiresAt: Date;
+    now?: Date;
+  }): Promise<void> {
+    const actor = ActorSchema.parse(input.actorSubject);
+    const token = z
+      .string()
+      .min(20)
+      .max(16 * 1024)
+      .parse(input.accessToken);
+    const now = validateDate(input.now ?? new Date());
+    const expiresAt = validateDate(input.expiresAt);
+    if (expiresAt.getTime() <= now.getTime() + 2 * 60_000) throw new PersistenceError('conflict');
+    const encrypted = this.cipher.seal(token, databricksFixTokenAssociatedData(actor));
+    await this.executor.query(
+      `INSERT INTO lineage_impact.databricks_fix_authorizations (
+        actor_subject, encrypted_access_token, token_expires_at, connected_at
+      ) VALUES ($1, $2, $3, $4)
+      ON CONFLICT (actor_subject) DO UPDATE SET
+        encrypted_access_token = EXCLUDED.encrypted_access_token,
+        token_expires_at = EXCLUDED.token_expires_at,
+        connected_at = EXCLUDED.connected_at`,
+      [actor, encrypted, expiresAt.toISOString(), now.toISOString()]
+    );
+  }
+
+  /** Never return this token to the browser or use it for assessment SQL. */
+  async loadActiveDatabricksFixToken(actorSubject: string, now: Date = new Date()): Promise<string | null> {
+    const actor = ActorSchema.parse(actorSubject);
+    const cutoff = new Date(validateDate(now).getTime() + 2 * 60_000).toISOString();
+    const result = await this.executor.query(
+      `SELECT encrypted_access_token
+       FROM lineage_impact.databricks_fix_authorizations
+       WHERE actor_subject = $1 AND token_expires_at > $2`,
+      [actor, cutoff]
+    );
+    if (result.rows.length === 0) return null;
+    const row = parseSingleRow(z.object({ encrypted_access_token: z.unknown() }), result.rows);
+    return this.cipher.openText(parseJsonColumn(row.encrypted_access_token), databricksFixTokenAssociatedData(actor));
+  }
+
+  async disconnectDatabricksFixAuthorization(actorSubject: string): Promise<void> {
+    const actor = ActorSchema.parse(actorSubject);
+    await this.executor.query('DELETE FROM lineage_impact.databricks_fix_authorizations WHERE actor_subject = $1', [
+      actor,
+    ]);
+  }
+
+  async deleteExpiredDatabricksFixAuthorizations(now: Date = new Date()): Promise<void> {
+    await this.executor.query('DELETE FROM lineage_impact.databricks_fix_authorizations WHERE token_expires_at <= $1', [
+      validateDate(now).toISOString(),
+    ]);
+  }
+
   async saveGitHubConnection(input: {
     actorSubject: string;
     identity: GitHubIdentity;
@@ -1211,6 +1268,10 @@ function nullableShortText(value: string | null | undefined, maxLength: number):
 
 function githubCredentialAssociatedData(actor: string): string {
   return `github-credential:v1:${actor}`;
+}
+
+function databricksFixTokenAssociatedData(actor: string): string {
+  return `databricks-fix-access-token:v1:${actor}`;
 }
 
 function patchAssociatedData(actor: string, patchId: string): string {
