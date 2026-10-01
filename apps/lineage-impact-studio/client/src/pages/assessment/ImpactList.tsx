@@ -236,8 +236,11 @@ function ConsumerDetails({ asset, usage, onRetry }: { asset: string; usage: Usag
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 border-y border-border py-3 text-sm sm:grid-cols-4">
         {USAGE_KINDS.map(({ kind, plural }) => (
-          <div key={kind} className="flex items-baseline justify-between gap-2">
-            <dt className="text-muted-foreground">{plural}</dt>
+          <div key={kind} className="flex items-center justify-between gap-2">
+            <dt className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+              <img src={CONSUMER_ICONS[kind]} alt="" aria-hidden="true" className="size-4 shrink-0" />
+              {plural}
+            </dt>
             <dd className="font-mono font-semibold tabular-nums">
               {formatObservedCount(details.byType[kind], details.complete)}
             </dd>

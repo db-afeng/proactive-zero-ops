@@ -373,6 +373,19 @@ test('shows table-level consumer counts and keeps duplicate impact nodes synchro
   await expect(
     page.getByText('Counts include visible objects observed in the last 30 days, regardless of impact scope.')
   ).toBeVisible();
+  for (const [kind, plural] of [
+    ['query', 'Queries'],
+    ['dashboard', 'Dashboards'],
+    ['genie', 'Genie rooms'],
+    ['notebook', 'Notebooks'],
+    ['pipeline', 'Pipelines'],
+    ['job', 'Jobs'],
+    ['alert', 'Alerts'],
+  ]) {
+    await expect(
+      page.locator('dt').filter({ hasText: plural }).locator(`img[src="/consumer-icons/${kind}.svg"]`)
+    ).toHaveCount(1);
+  }
   const consumers = page.getByRole('group', { name: `Observed consumers of ${LOAN_EXPOSURE_ASSET}`, exact: true });
   const directLinks = consumers.getByRole('region', {
     name: `Direct consumers of ${LOAN_EXPOSURE_ASSET}`,
