@@ -130,12 +130,15 @@ def test_formatting_and_comments_do_not_produce_a_definition_change() -> None:
 
 def test_selected_outstanding_balance_break_is_a_structured_column_change() -> None:
     path = TRANSFORMATIONS / "bronze" / "loan_accounts.sql"
-    base = path.read_text()
-    proposed = base.replace(
+    proposed = path.read_text()
+    base = proposed.replace(
+        "CONCAT(\n"
+        "    'AUD ',\n"
+        "    FORMAT_NUMBER(CAST(outstanding_balance_raw AS DECIMAL(18, 2)), 2)\n"
+        "  ) AS outstanding_balance",
         "CAST(outstanding_balance_raw AS DECIMAL(18, 2)) AS outstanding_balance",
-        "CONCAT('AUD ', FORMAT_NUMBER(CAST(outstanding_balance_raw AS DECIMAL(18, 2)), 2)) "
-        "AS outstanding_balance",
     )
+    assert base != proposed
     change = analyze_sql_change(
         base_sql=base,
         proposed_sql=proposed,
