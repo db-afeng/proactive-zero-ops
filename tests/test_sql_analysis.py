@@ -129,8 +129,14 @@ def test_formatting_and_comments_do_not_produce_a_definition_change() -> None:
 
 
 def test_selected_outstanding_balance_break_is_a_structured_column_change() -> None:
-    path = TRANSFORMATIONS / "bronze" / "loan_accounts.sql"
-    base = path.read_text()
+    # Keep the numeric baseline independent of the demo's current SQL so this
+    # regression still exercises a real before/after change on either PR state.
+    path = "loan_accounts.sql"
+    base = """
+    CREATE OR REFRESH MATERIALIZED VIEW ${catalog}.${bronze_schema}.loan_accounts AS
+    SELECT CAST(outstanding_balance_raw AS DECIMAL(18, 2)) AS outstanding_balance
+    FROM ${catalog}.raw.loan_accounts;
+    """
     proposed = base.replace(
         "CAST(outstanding_balance_raw AS DECIMAL(18, 2)) AS outstanding_balance",
         "CONCAT('AUD ', FORMAT_NUMBER(CAST(outstanding_balance_raw AS DECIMAL(18, 2)), 2)) "
