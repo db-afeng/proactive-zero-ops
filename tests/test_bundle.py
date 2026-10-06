@@ -313,7 +313,7 @@ def test_compare_captures_catalog_schema_and_pipeline_source_changes(tmp_path: P
     )
 
 
-def test_declared_warehouse_runtime_id_is_allowed_only_for_consumer_warehouse_fields(
+def test_declared_warehouse_runtime_id_is_allowed_for_consumers_and_app_bindings(
     tmp_path: Path,
 ) -> None:
     repo = initialize_repo(tmp_path)
@@ -329,6 +329,14 @@ resources:
   genie_spaces:
     explorer:
       warehouse_id: ${resources.sql_warehouses.risk.id}
+  apps:
+    studio:
+      name: studio
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${resources.sql_warehouses.risk.id}
+            permission: CAN_USE
 """
     revision = write_files(repo, files)
 
@@ -341,6 +349,9 @@ resources:
     assert snapshot.resource_map["genie_spaces.explorer"].config["warehouse_id"] == (
         "${resources.sql_warehouses.risk.id}"
     )
+    assert snapshot.resource_map["apps.studio"].config["resources"][0]["sql_warehouse"][
+        "id"
+    ] == "${resources.sql_warehouses.risk.id}"
 
 
 @pytest.mark.parametrize(
@@ -354,6 +365,15 @@ resources:
             "      warehouse_id: prefix-${resources.sql_warehouses.risk.id}"
         ),
         "pipelines:\n    risk:\n      warehouse_id: ${resources.sql_warehouses.risk.id}",
+        "apps:\n    studio:\n      source_code_path: ${resources.sql_warehouses.risk.id}",
+        (
+            "apps:\n    studio:\n      resources:\n        - name: sql-warehouse\n"
+            "          sql_warehouse:\n            id: ${resources.sql_warehouses.missing.id}"
+        ),
+        (
+            "apps:\n    studio:\n      resources:\n        - name: sql-warehouse\n"
+            "          sql_warehouse:\n            id: prefix-${resources.sql_warehouses.risk.id}"
+        ),
     ],
 )
 def test_other_runtime_id_references_remain_discovery_limitations(

@@ -736,13 +736,20 @@ def _is_consumer_warehouse_id_reference(
     token: str,
 ) -> bool:
     """Allow a declared warehouse's runtime ID only where it cannot alter SQL discovery."""
-    if (
-        len(path) != 4
-        or path[0] != "resources"
-        or path[1] not in {"dashboards", "genie_spaces"}
-        or path[3] != "warehouse_id"
-        or value != f"${{{token}}}"
-    ):
+    consumer_warehouse = (
+        len(path) == 4
+        and path[0] == "resources"
+        and path[1] in {"dashboards", "genie_spaces"}
+        and path[3] == "warehouse_id"
+    )
+    app_warehouse_binding = (
+        len(path) == 7
+        and path[:2] == ("resources", "apps")
+        and path[3] == "resources"
+        and path[4].isdecimal()
+        and path[5:] == ("sql_warehouse", "id")
+    )
+    if not (consumer_warehouse or app_warehouse_binding) or value != f"${{{token}}}":
         return False
     parts = token.split(".")
     if len(parts) != 4 or parts[:2] != ["resources", "sql_warehouses"] or parts[3] != "id":
