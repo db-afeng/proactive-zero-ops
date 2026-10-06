@@ -1,8 +1,14 @@
 from types import SimpleNamespace
 
 import pytest
+from sqlglot import exp, parse_one
 
-from lineage_guard.lineage import LineageGraph, LineageRepository, StatementExecutor
+from lineage_guard.lineage import (
+    LineageGraph,
+    LineageQueryError,
+    LineageRepository,
+    StatementExecutor,
+)
 from lineage_guard.models import EvidenceOrigin, LineageEdge
 
 
@@ -53,6 +59,8 @@ def test_code_and_observed_dependency_evidence_remain_distinct() -> None:
 
 
 class FakeExecutor:
+    workspace_id = 7474645195281143
+
     def __init__(self) -> None:
         self.calls: list[str] = []
 
@@ -92,6 +100,8 @@ def test_repository_walks_breadth_first() -> None:
 
 
 class EntityExecutor:
+    workspace_id = 7474645195281143
+
     def query(self, statement: str) -> list[list[str | None]]:
         if "table_lineage" in statement:
             return [
@@ -117,6 +127,107 @@ def test_repository_includes_external_entity_consumers_without_traversing_them()
     assert edge.target_table == "databricks://dashboard/abc-123"
     assert edge.entity_id == "abc-123"
     assert edge.created_by == "owner@example.com"
+
+
+@pytest.mark.parametrize("lineage_table", ["column_lineage", "table_lineage"])
+def test_repository_excludes_other_workspace_evidence_for_the_same_dataset(
+    lineage_table: str,
+) -> None:
+    active_workspace_id = 7474645195281143
+    old_workspace_id = 7474650525906616
+    source = "main.bronze.accounts"
+    current_target = (
+        "main.silver.current_exposure"
+        if lineage_table == "column_lineage"
+        else "databricks://dashboard/current-report"
+    )
+    old_target = (
+        "main.silver.old_exposure"
+        if lineage_table == "column_lineage"
+        else "databricks://dashboard/old-report"
+    )
+    queried_tables: set[str] = set()
+    identity_calls = 0
+
+    def get_workspace_id() -> int:
+        nonlocal identity_calls
+        identity_calls += 1
+        return active_workspace_id
+
+    def execute_statement(*, statement: str, **_: object) -> SimpleNamespace:
+        query = parse_one(statement, read="databricks")
+        table = next(query.find_all(exp.Table)).name
+        queried_tables.add(table)
+        workspace_condition = next(
+            (
+                item
+                for item in query.args["where"].find_all(exp.EQ)
+                if isinstance(item.this, exp.Column) and item.this.name == "workspace_id"
+            ),
+            None,
+        )
+        workspace_filter = (
+            int(workspace_condition.expression.this) if workspace_condition is not None else None
+        )
+        rows = []
+        if table == lineage_table:
+            for workspace_id, target in (
+                (old_workspace_id, old_target),
+                (active_workspace_id, current_target),
+            ):
+                if workspace_filter is not None and workspace_id != workspace_filter:
+                    continue
+                if table == "column_lineage":
+                    rows.append([source, "balance", target, "ead", "2026-10-06 00:00:00"])
+                else:
+                    rows.append(
+                        [
+                            source,
+                            target,
+                            "DASHBOARD",
+                            "DASHBOARD",
+                            target.rsplit("/", 1)[-1],
+                            "run-1",
+                            "owner@example.com",
+                            "2026-10-06 00:00:00",
+                        ]
+                    )
+        return SimpleNamespace(
+            status=SimpleNamespace(state="SUCCEEDED"),
+            result=SimpleNamespace(data_array=rows),
+        )
+
+    workspace = SimpleNamespace(
+        get_workspace_id=get_workspace_id,
+        statement_execution=SimpleNamespace(execute_statement=execute_statement),
+    )
+    executor = StatementExecutor(warehouse_id="new-warehouse", workspace_client=workspace)
+    graph = LineageRepository(executor=executor).downstream_graph({source}, max_depth=1)
+
+    assert queried_tables == {"column_lineage", "table_lineage"}
+    assert graph.downstream_tables() == {current_target}
+    assert not graph.has_path([source, old_target])
+    assert identity_calls == 1
+
+
+@pytest.mark.parametrize("workspace_id", [None, 0, -1, True, "1 OR 1=1", 2**63])
+def test_repository_rejects_invalid_authenticated_workspace_identity(workspace_id: object) -> None:
+    workspace = SimpleNamespace(get_workspace_id=lambda: workspace_id)
+    executor = StatementExecutor(warehouse_id="warehouse", workspace_client=workspace)
+
+    with pytest.raises(LineageQueryError, match="authenticated workspace ID"):
+        LineageRepository(executor=executor)
+
+
+def test_repository_fails_closed_when_workspace_identity_is_unavailable() -> None:
+    def get_workspace_id() -> int:
+        raise RuntimeError("workspace identity lookup failed")
+
+    workspace = SimpleNamespace(get_workspace_id=get_workspace_id)
+    executor = StatementExecutor(warehouse_id="warehouse", workspace_client=workspace)
+
+    with pytest.raises(RuntimeError, match="workspace identity lookup failed"):
+        LineageRepository(executor=executor)
 
 
 def test_statement_executor_retries_transient_lineage_failure(
