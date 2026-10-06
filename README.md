@@ -7,8 +7,9 @@ capital decisions.
 
 ## Architecture
 
-The Databricks Asset Bundle creates three schemas in `proactive_zero_ops_catalog`, a triggered serverless Lakeflow
-Declarative Pipeline, and an X-Small serverless SQL warehouse. Twelve materialized views model
+The Databricks Asset Bundle creates three data schemas plus a restricted evidence schema and
+managed Volume in `proactive_zero_ops_catalog`, a triggered serverless Lakeflow Declarative
+Pipeline, and an X-Small serverless SQL warehouse. Twelve materialized views model
 borrowers, facilities, payments, credit scores, collateral, exposure at default, expected loss,
 watchlist signals, and sector concentration.
 
@@ -59,20 +60,21 @@ disclosure rules remain in trusted checker code rather than pull-request configu
 uv sync --extra dev
 uv run pytest
 uv run ruff check .
-databricks bundle validate --strict --target dev --profile fe-sandbox-proactive-zero-ops
+databricks bundle validate --strict --target dev --profile fe-sandbox-proactive-zero-ops-2
 ```
 
-Deploy and run the baseline after authenticating the selected profile:
+Ensure `proactive_zero_ops_catalog` exists with managed storage enabled, then
+authenticate the selected profile and deploy and run the baseline:
 
 ```bash
-databricks bundle deploy --target dev --profile fe-sandbox-proactive-zero-ops
-databricks bundle run credit_risk_pipeline --target dev --profile fe-sandbox-proactive-zero-ops
+databricks bundle deploy --target dev --profile fe-sandbox-proactive-zero-ops-2
+databricks bundle run credit_risk_pipeline --target dev --profile fe-sandbox-proactive-zero-ops-2
 ```
 
 Run the guard against two commits:
 
 ```bash
-export DATABRICKS_CONFIG_PROFILE=fe-sandbox-proactive-zero-ops
+export DATABRICKS_CONFIG_PROFILE=fe-sandbox-proactive-zero-ops-2
 export DATABRICKS_WAREHOUSE_ID=<warehouse-id>
 export DATABRICKS_SERVING_ENDPOINT=<endpoint-name>
 export DATABRICKS_BUNDLE_TARGET=dev
@@ -106,10 +108,17 @@ and creation time. Volume publication is immutable and idempotent for identical 
 
 See [docs/oidc-setup.md](docs/oidc-setup.md) for the administrator checkpoint.
 
-The deployed demo in workspace `7474650525906616` uses pipeline
-`af63282c-f470-4770-97b5-bab16c8c7113` and SQL warehouse `4604ceea74f29ea8`.
-Resource IDs remain stable across normal bundle updates but should be checked
-with `databricks bundle summary` after a destructive redeployment.
+The active workspace is `fe-sandbox-proactive-zero-ops-2` (`7474645195281143`).
+Its baseline pipeline is `3c21d044-7f62-42aa-85cb-fceaefba5c0c` and SQL warehouse
+is `b5b287c2b22bdd29`. Retrieve the deployed resource IDs with
+`databricks bundle summary --target dev --profile fe-sandbox-proactive-zero-ops-2`.
+Workspace resource IDs must be rediscovered when moving to a new workspace.
+
+Before the first deployment to a different workspace, back up the local
+`.databricks/bundle/<target>` directory outside the bundle source and remove it
+from the checkout. Reusing its deployment state can cause the new workspace
+deployment to refresh resource IDs from the previous workspace. Keep the
+backup until the new deployment and resource IDs have been verified.
 
 ## Demo SQL consumers for impact assessment
 
@@ -128,11 +137,11 @@ the root bundle:
 
 ```bash
 export DATABRICKS_AUTH_STORAGE=plaintext
-databricks bundle validate --strict --target dev --profile fe-sandbox-proactive-zero-ops
-databricks bundle deploy --target dev --profile fe-sandbox-proactive-zero-ops
+databricks bundle validate --strict --target dev --profile fe-sandbox-proactive-zero-ops-2
+databricks bundle deploy --target dev --profile fe-sandbox-proactive-zero-ops-2
 uv run python scripts/provision_credit_risk_consumers.py \
-  --profile fe-sandbox-proactive-zero-ops \
-  --warehouse-id 4604ceea74f29ea8 \
+  --profile fe-sandbox-proactive-zero-ops-2 \
+  --warehouse-id b5b287c2b22bdd29 \
   --run
 ```
 

@@ -1,0 +1,6 @@
+resources:
+  schemas:
+    lineage_guard_evidence:
+      catalog_name: ${var.catalog}
+      name: proactive_zero_ops_guard
+      comment: Restricted evidence storage for the pull-request lineage guard.

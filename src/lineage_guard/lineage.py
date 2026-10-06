@@ -4,6 +4,7 @@ import re
 import time
 from collections import defaultdict
 from collections.abc import Iterable
+from functools import cached_property
 from typing import Any
 
 from lineage_guard.models import EvidenceOrigin, LineageEdge
@@ -29,6 +30,18 @@ class StatementExecutor:
             workspace_client = WorkspaceClient()
         self.warehouse_id = warehouse_id
         self.workspace_client = workspace_client
+
+    @cached_property
+    def workspace_id(self) -> int:
+        """Use the identity of the same authenticated client that executes lineage SQL."""
+        workspace_id = self.workspace_client.get_workspace_id()
+        if (
+            isinstance(workspace_id, bool)
+            or not isinstance(workspace_id, int)
+            or not 0 < workspace_id <= 2**63 - 1
+        ):
+            raise LineageQueryError("authenticated workspace ID must be a positive BIGINT")
+        return workspace_id
 
     def query(self, statement: str, timeout_seconds: int = 120) -> list[list[Any]]:
         for attempt in range(3):
@@ -147,6 +160,7 @@ class LineageRepository:
             raise ValueError("lineage lookback must be between 1 and 365 days")
         self.executor = executor
         self.lookback_days = lookback_days
+        self.workspace_id = executor.workspace_id
 
     @staticmethod
     def _table_list(tables: Iterable[str]) -> str:
@@ -171,6 +185,7 @@ SELECT
   CAST(MAX(event_time) AS STRING)
 FROM system.access.column_lineage
 WHERE event_date >= dateadd(DAY, -{self.lookback_days}, current_date())
+  AND workspace_id = {self.workspace_id}
   AND lower(source_table_full_name) IN ({table_list})
   AND target_table_full_name IS NOT NULL
 GROUP BY ALL
@@ -220,6 +235,7 @@ SELECT
   CAST(MAX(event_time) AS STRING)
 FROM system.access.table_lineage
 WHERE event_date >= dateadd(DAY, -{self.lookback_days}, current_date())
+  AND workspace_id = {self.workspace_id}
   AND lower(source_table_full_name) IN ({table_list})
   AND (
     target_table_full_name IS NOT NULL
