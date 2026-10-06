@@ -1,0 +1,8 @@
+resources:
+  volumes:
+    restricted_assessments:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.lineage_guard_evidence.name}
+      name: restricted_assessments
+      volume_type: MANAGED
+      comment: Immutable restricted assessment envelopes read by Lineage Impact Studio.

@@ -4,6 +4,8 @@ bundle:
 variables:
   sql_warehouse_id:
     description: SQL warehouse used for user-authorized Unity Catalog checks
+    lookup:
+      warehouse: proactive-zero-ops-lineage-guard
   files_id:
     description: Three-level Unity Catalog name of the restricted assessment Volume
   postgres_branch:
@@ -75,10 +77,9 @@ targets:
   default:
     default: true
     workspace:
-      host: https://fe-sandbox-proactive-zero-ops.cloud.databricks.com
+      host: https://fe-sandbox-proactive-zero-ops-2.cloud.databricks.com
 
     variables:
-      sql_warehouse_id: 4604ceea74f29ea8
       files_id: proactive_zero_ops_catalog.proactive_zero_ops_guard.restricted_assessments
       postgres_branch: projects/lineage-impact-studio/branches/production
       postgres_database: projects/lineage-impact-studio/branches/production/databases/databricks-postgres

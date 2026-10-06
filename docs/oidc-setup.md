@@ -2,7 +2,7 @@
 
 Complete this checkpoint after the baseline bundle is deployed and before opening the deliberately
 breaking PR. It uses GitHub workload identity federation and stores no Databricks secret. Commands
-below assume authenticated `gh`, workspace profile `fe-sandbox-proactive-zero-ops`, and the
+below assume authenticated `gh`, workspace profile `fe-sandbox-proactive-zero-ops-2`, and the
 account-admin Databricks CLI profile `fevm-aws`.
 
 ## 1. Create the GitHub environment
@@ -19,9 +19,9 @@ Add these environment variables:
 
 | Variable | Value |
 | --- | --- |
-| `DATABRICKS_HOST` | `https://fe-sandbox-proactive-zero-ops.cloud.databricks.com` |
+| `DATABRICKS_HOST` | `https://fe-sandbox-proactive-zero-ops-2.cloud.databricks.com` |
 | `DATABRICKS_CLIENT_ID` | Application ID of the CI service principal |
-| `DATABRICKS_WAREHOUSE_ID` | `4604ceea74f29ea8` |
+| `DATABRICKS_WAREHOUSE_ID` | `b5b287c2b22bdd29` |
 | `DATABRICKS_SERVING_ENDPOINT` | `databricks-gpt-5-6-terra` (current compatible endpoint) |
 | `DATABRICKS_BUNDLE_TARGET` | `dev` |
 | `LINEAGE_GUARD_RESTRICTED_VOLUME_ROOT` | `/Volumes/proactive_zero_ops_catalog/proactive_zero_ops_guard/restricted_assessments` |
@@ -35,7 +35,7 @@ Executable bundle generators and unresolved dynamic configuration are reported a
 ## 2. Create the Databricks identity and federation policy
 
 Create a service principal named `proactive-zero-ops-lineage-guard`, assign it to workspace
-`7474650525906616`, then create the account-level federation policy. Record the returned numeric
+`7474645195281143`, then create the account-level federation policy. Record the returned numeric
 `id` as `<service-principal-id>` and `applicationId` as `<service-principal-application-id>`.
 
 ```bash
@@ -45,7 +45,7 @@ databricks account service-principals create \
   --profile fevm-aws
 
 databricks account workspace-assignment update \
-  7474650525906616 \
+  7474645195281143 \
   <service-principal-id> \
   --json '{"permissions":["USER"]}' \
   --profile fevm-aws
@@ -56,7 +56,7 @@ databricks account service-principal-federation-policy create \
   --json '{
     "oidc_policy": {
       "issuer": "https://token.actions.githubusercontent.com",
-      "audiences": ["https://fe-sandbox-proactive-zero-ops.cloud.databricks.com/oidc/v1/token"],
+      "audiences": ["https://fe-sandbox-proactive-zero-ops-2.cloud.databricks.com/oidc/v1/token"],
       "subject": "repo:db-afeng@197553067/proactive-zero-ops@1384523601:environment:lineage-guard"
     }
   }' \
@@ -69,7 +69,7 @@ The federation policy body is exactly:
 {
   "oidc_policy": {
     "issuer": "https://token.actions.githubusercontent.com",
-    "audiences": ["https://fe-sandbox-proactive-zero-ops.cloud.databricks.com/oidc/v1/token"],
+    "audiences": ["https://fe-sandbox-proactive-zero-ops-2.cloud.databricks.com/oidc/v1/token"],
     "subject": "repo:db-afeng@197553067/proactive-zero-ops@1384523601:environment:lineage-guard"
   }
 }
@@ -107,20 +107,20 @@ databricks service-principals patch <service-principal-id> \
       "value":[{"value":"databricks-sql-access"}]
     }]
   }' \
-  --profile fe-sandbox-proactive-zero-ops
+  --profile fe-sandbox-proactive-zero-ops-2
 ```
 
 Grant the principal `CAN_USE` on only the bundle-created SQL warehouse:
 
 ```bash
-databricks permissions update warehouses 4604ceea74f29ea8 \
+databricks permissions update warehouses b5b287c2b22bdd29 \
   --json '{
     "access_control_list": [{
       "service_principal_name": "<service-principal-application-id>",
       "permission_level": "CAN_USE"
     }]
   }' \
-  --profile fe-sandbox-proactive-zero-ops
+  --profile fe-sandbox-proactive-zero-ops-2
 ```
 
 As a metastore administrator, grant read access to only the two lineage tables:
@@ -158,7 +158,7 @@ With an authenticated administrator profile, list compatible endpoints and smoke
 output:
 
 ```bash
-uv run python -m lineage_guard discover-endpoint --profile fe-sandbox-proactive-zero-ops
+uv run python -m lineage_guard discover-endpoint --profile fe-sandbox-proactive-zero-ops-2
 ```
 
 If discovery reports that no `system.ai` Claude Sonnet endpoint is available, have a workspace
@@ -180,7 +180,7 @@ resolve its endpoint ID and grant `CAN_QUERY`:
 
 ```bash
 databricks serving-endpoints get <endpoint-name> \
-  --profile fe-sandbox-proactive-zero-ops \
+  --profile fe-sandbox-proactive-zero-ops-2 \
   --output json
 
 databricks serving-endpoints update-permissions <endpoint-id-from-get> \
@@ -190,7 +190,7 @@ databricks serving-endpoints update-permissions <endpoint-id-from-get> \
       "permission_level": "CAN_QUERY"
     }]
   }' \
-  --profile fe-sandbox-proactive-zero-ops
+  --profile fe-sandbox-proactive-zero-ops-2
 ```
 
 Set the GitHub environment variables:
@@ -198,13 +198,13 @@ Set the GitHub environment variables:
 ```bash
 gh variable set DATABRICKS_HOST \
   --env lineage-guard \
-  --body https://fe-sandbox-proactive-zero-ops.cloud.databricks.com
+  --body https://fe-sandbox-proactive-zero-ops-2.cloud.databricks.com
 gh variable set DATABRICKS_CLIENT_ID \
   --env lineage-guard \
   --body <service-principal-application-id>
 gh variable set DATABRICKS_WAREHOUSE_ID \
   --env lineage-guard \
-  --body 4604ceea74f29ea8
+  --body b5b287c2b22bdd29
 gh variable set DATABRICKS_SERVING_ENDPOINT \
   --env lineage-guard \
   --body <endpoint-name>

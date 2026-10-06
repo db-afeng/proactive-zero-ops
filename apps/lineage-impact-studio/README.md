@@ -75,9 +75,9 @@ Databricks identity, and can review and approve one guarded remediation commit.
 
 | Resource          | Configuration                                                                         |
 | ----------------- | ------------------------------------------------------------------------------------- |
-| Workspace/profile | `fe-sandbox-proactive-zero-ops`                                                       |
+| Workspace/profile | `fe-sandbox-proactive-zero-ops-2`                                                       |
 | App               | `lineage-impact-studio`                                                               |
-| SQL warehouse     | `4604ceea74f29ea8` (`proactive-zero-ops-lineage-guard`)                               |
+| SQL warehouse     | `b5b287c2b22bdd29` (`proactive-zero-ops-lineage-guard`)                               |
 | Restricted Volume | `/Volumes/proactive_zero_ops_catalog/proactive_zero_ops_guard/restricted_assessments` |
 | Volume permission | `READ_VOLUME` for the app service principal                                           |
 | Lakebase project  | `projects/lineage-impact-studio`                                                      |
@@ -111,7 +111,7 @@ arguments.
 The canonical callback is configured directly in `app.yaml` as:
 
 ```text
-https://lineage-impact-studio-7474650525906616.aws.databricksapps.com/api/github/oauth/callback
+https://lineage-impact-studio-7474645195281143.aws.databricksapps.com/api/github/oauth/callback
 ```
 
 The client ID and client secret are injected through `valueFrom` bindings. Never
@@ -121,7 +121,7 @@ The server must refuse GitHub OAuth when any required value is absent.
 Manual Fix also requires a separate **public** custom Databricks OAuth app
 integration named `lineage-impact-studio-manual-fix`, registered in account
 `0d26daa6-5e44-4c97-a497-ef015f91254a`. It uses only the exact redirect
-`https://lineage-impact-studio-7474650525906616.aws.databricksapps.com/api/databricks/oauth/callback`,
+`https://lineage-impact-studio-7474645195281143.aws.databricksapps.com/api/databricks/oauth/callback`,
 with `scopes` and `user_authorized_scopes` set to `all-apis` and a 60-minute access
 token lifetime. The OAuth request omits `offline_access`, and the app neither
 requests nor stores a refresh token. The account policy also sets a 60-minute
@@ -166,7 +166,7 @@ assessed base/head SHAs but does not require push access.
 Deployment is blocked until all of the following are resolved:
 
 1. Workspace user authorization remains enabled and intended reviewers receive
-   `CAN_USE` on SQL warehouse `4604ceea74f29ea8`. The resource declaration
+   `CAN_USE` on SQL warehouse `b5b287c2b22bdd29`. The resource declaration
    grants the app service principal access, but OBO queries require the user to
    have warehouse access independently.
 2. Create the `lineage-impact-studio` secret scope and provision its declared
@@ -202,8 +202,8 @@ npm run typegen
 npm --prefix tests ci
 npm run test:e2e
 git diff --check
-DATABRICKS_AUTH_STORAGE=plaintext databricks bundle validate --strict --profile fe-sandbox-proactive-zero-ops
-DATABRICKS_AUTH_STORAGE=plaintext databricks apps validate --profile fe-sandbox-proactive-zero-ops
+DATABRICKS_AUTH_STORAGE=plaintext databricks bundle validate --strict --profile fe-sandbox-proactive-zero-ops-2
+DATABRICKS_AUTH_STORAGE=plaintext databricks apps validate --profile fe-sandbox-proactive-zero-ops-2
 ```
 
 Also require the Playwright graph, accessibility, visual-regression,

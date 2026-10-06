@@ -13,7 +13,7 @@ resources:
       resources:
         - name: sql-warehouse
           sql_warehouse:
-            id: 4604ceea74f29ea8
+            id: ${resources.sql_warehouses.lineage_guard.id}
             permission: CAN_USE
         - name: files
           uc_securable:
