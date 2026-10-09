@@ -25,7 +25,15 @@ GOLD = "proactive_zero_ops_catalog.proactive_zero_ops_gold.portfolio_expected_lo
 
 def fixture_changes() -> SimpleNamespace:
     source_path = TRANSFORMATIONS / "bronze" / "loan_accounts.sql"
-    base = source_path.read_text()
+    # The demo can change this column in production SQL. Keep a fixed numeric
+    # baseline so the evidence tests still exercise the intended contract break.
+    base = """
+    CREATE OR REFRESH MATERIALIZED VIEW ${catalog}.${bronze_schema}.loan_accounts (
+      CONSTRAINT non_negative_balance EXPECT (outstanding_balance >= 0) ON VIOLATION DROP ROW
+    ) AS
+    SELECT CAST(outstanding_balance_raw AS DECIMAL(18, 2)) AS outstanding_balance
+    FROM ${catalog}.raw.loan_accounts;
+    """
     proposed = base.replace(
         "CAST(outstanding_balance_raw AS DECIMAL(18, 2)) AS outstanding_balance",
         "CONCAT('AUD ', FORMAT_NUMBER(CAST(outstanding_balance_raw AS DECIMAL(18, 2)), 2)) "
